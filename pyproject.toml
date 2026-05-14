@@ -3,10 +3,11 @@ name = "titiler-covjson"
 version = "0.1.0"
 description = "CoverageJSON output format and API extension for TiTiler"
 readme = "README.md"
-license = {text = "MIT"}
+license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    {name = "Emmanuel Mathot", email = "emmanuel@developmentseed.org"},
+    { name = "Emmanuel Mathot", email = "emmanuel@developmentseed.org" },
+    { name = "Chuck Daniels", email = "chuck@developmentseed.org" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -26,21 +27,7 @@ dependencies = [
     "covjson-pydantic>=0.7.0,<1.0",
     "rio-tiler>=7.0.0",
     "shapely>=2.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov",
-    "pytest-asyncio",
-    "httpx",
-    "ruff",
-    "mypy",
-    "pre-commit",
-]
-docs = [
-    "mkdocs",
-    "mkdocs-material",
+    "numpy>=2.2.6",
 ]
 
 [project.urls]
@@ -53,20 +40,59 @@ Issues = "https://github.com/DevelopmentSeed/titiler-covjson/issues"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-asyncio",
+    "httpx",
+    "ruff",
+    "mypy",
+    "pre-commit",
+    "types-shapely>=2.1.0.20260508",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0.20260508",
+]
+docs = ["mkdocs", "mkdocs-material"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/titiler_covjson"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["src", "tests"]
 asyncio_mode = "auto"
+addopts = ["--doctest-modules"]
+doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]
 
 [tool.ruff]
 target-version = "py310"
-line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B"]
+preview = true
+select = [
+    "B",
+    "DOC",
+    "E",
+    "F",
+    "FURB",
+    "I",
+    "N",
+    "NPY",
+    "PERF",
+    "TRY",
+    "UP",
+    "W",
+]
 
 [tool.mypy]
+files = ["src", "tests"]
 python_version = "3.10"
 strict = true
+
+[[tool.mypy.overrides]]
+module = ["rasterio", "rasterio.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_calls = false
