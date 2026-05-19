@@ -277,8 +277,8 @@ def numpy_to_covjson_dtype(dtype: npt.DTypeLike) -> str:
 
     if dtype.kind == "f":
         return "float"
-    if dtype.kind in {"i", "u"}:
-        # signed or unsigned integer
+    if dtype.kind in {"i", "u", "b"}:
+        # signed or unsigned integer, or bool
         return "integer"
     if dtype.kind in {"O", "S", "T", "U"}:
         # object, byte-string, or unicode-string (variable-width or fixed-width)
