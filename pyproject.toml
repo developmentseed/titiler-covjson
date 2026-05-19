@@ -25,7 +25,6 @@ classifiers = [
 dependencies = [
     "titiler.core>=0.18.0,<1.0",
     "covjson-pydantic>=0.7.0,<1.0",
-    "rio-tiler>=7.0.0",
     "shapely>=2.0",
     "numpy>=2.2.6",
 ]

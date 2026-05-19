@@ -2296,8 +2296,6 @@ dependencies = [
     { name = "covjson-pydantic" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "rio-tiler", version = "7.9.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "rio-tiler", version = "9.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "shapely" },
     { name = "titiler-core", version = "0.24.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "titiler-core", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -2325,7 +2323,6 @@ docs = [
 requires-dist = [
     { name = "covjson-pydantic", specifier = ">=0.7.0,<1.0" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "rio-tiler", specifier = ">=7.0.0" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "titiler-core", specifier = ">=0.18.0" },
 ]
