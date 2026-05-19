@@ -63,29 +63,43 @@ _UCUM_CODE_TO_UNIT: dict[str, Unit] = {
 }
 
 
-def create_spatial_2d_reference(crs_uri: str) -> ReferenceSystemConnectionObject:
+def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionObject:
     """Create a 2-D spatial reference system connection object.
 
     Args:
-        crs_uri: An OGC CRS URI, e.g. the result of :func:`crs_to_ogc_uri`.
+        crs: A rasterio CRS instance.
 
     Returns:
         ReferenceSystemConnectionObject: A reference system connection object
-            for the given CRS URI.
+            for the given CRS.
 
     Examples:
-        >>> uri = crs_to_ogc_uri(rasterio.CRS.from_string("OGC:CRS84"))
-        >>> ref = create_spatial_2d_reference(uri)
+        Create a reference for a Geographic CRS:
+
+        >>> ref = create_spatial_2d_reference(rasterio.CRS.from_string("OGC:CRS84"))
         >>> ref.coordinates
         ['x', 'y']
         >>> ref.system.type
         'GeographicCRS'
         >>> ref.system.id
         'http://www.opengis.net/def/crs/OGC/0/CRS84'
+
+        Create a reference for a Projected CRS:
+
+        >>> ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(32637))
+        >>> ref.coordinates
+        ['x', 'y']
+        >>> ref.system.type
+        'ProjectedCRS'
+        >>> ref.system.id
+        'http://www.opengis.net/def/crs/EPSG/0/32637'
     """
     return ReferenceSystemConnectionObject(
         coordinates=["x", "y"],
-        system=ReferenceSystem(type="GeographicCRS", id=crs_uri),
+        system=ReferenceSystem(
+            type="GeographicCRS" if crs.is_geographic else "ProjectedCRS",
+            id=crs_to_ogc_uri(crs),
+        ),
     )
 
 
