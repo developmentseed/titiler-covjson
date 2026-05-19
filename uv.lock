@@ -904,37 +904,15 @@ wheels = [
 name = "morecantile"
 version = "6.2.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "attrs", marker = "python_full_version < '3.11'" },
-    { name = "pydantic", marker = "python_full_version < '3.11'" },
+    { name = "attrs" },
+    { name = "pydantic" },
     { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/90/72/2d0e1f1e936538004581f792f8a2377831761fd12e4ed0a665abf768fc60/morecantile-6.2.0.tar.gz", hash = "sha256:65c7150ea68bbe16ee6f75f3f171ac1ae51ab26e7a77c92a768048f40f916412", size = 46317, upload-time = "2024-12-19T15:35:47.233Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/09/6c/6ca6ed6b93c9879e6a804515169faefcd99e02114ef113598de9b71d27be/morecantile-6.2.0-py3-none-any.whl", hash = "sha256:a3cc8f85c6afcddb6c2ec933ad692557f96e89689730dbbd4350bdcf6ac52be0", size = 49473, upload-time = "2024-12-19T15:35:41.694Z" },
-]
-
-[[package]]
-name = "morecantile"
-version = "7.0.3"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15'",
-    "python_full_version >= '3.12' and python_full_version < '3.15'",
-    "python_full_version == '3.11.*'",
-]
-dependencies = [
-    { name = "attrs", marker = "python_full_version >= '3.11'" },
-    { name = "click", marker = "python_full_version >= '3.11'" },
-    { name = "pydantic", marker = "python_full_version >= '3.11'" },
-    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/44/fa4f0685481b51e5ce33089ca84e821453593d34f306738515a937934751/morecantile-7.0.3.tar.gz", hash = "sha256:b44419c83f310b411b1f547df2d07c115dc6d194ab7c8a4c318a154490e938c1", size = 43104, upload-time = "2026-02-04T23:03:26.423Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/1a/f9edb1c167bd8ad214dc87e9ae17fb208d08f7a05e724f74ce29e375c8de/morecantile-7.0.3-py3-none-any.whl", hash = "sha256:747c6b8f3a8029ddaadb04d96c834f10d2796d1898ad893bed47c896a058ddc7", size = 50885, upload-time = "2026-02-04T23:03:27.463Z" },
 ]
 
 [[package]]
@@ -1877,53 +1855,24 @@ wheels = [
 name = "rio-tiler"
 version = "7.9.5"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "attrs", marker = "python_full_version < '3.11'" },
-    { name = "cachetools", marker = "python_full_version < '3.11'" },
-    { name = "color-operations", marker = "python_full_version < '3.11'" },
-    { name = "httpx", marker = "python_full_version < '3.11'" },
-    { name = "morecantile", version = "6.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numexpr", marker = "python_full_version < '3.11'" },
+    { name = "attrs" },
+    { name = "cachetools" },
+    { name = "color-operations" },
+    { name = "httpx" },
+    { name = "morecantile" },
+    { name = "numexpr" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pydantic", marker = "python_full_version < '3.11'" },
-    { name = "pystac", marker = "python_full_version < '3.11'" },
-    { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pydantic" },
+    { name = "pystac" },
+    { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/88/0f/ac3177f82b14087efb6f022cce41ec833883ab86933f84dfe0477e1cd46b/rio_tiler-7.9.5.tar.gz", hash = "sha256:a94c651cfd3ff7bce0474627080ddeb01ce0e45800a397a6b10c1a5355821b1d", size = 176205, upload-time = "2026-03-24T17:43:48.407Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/3e/c49bd1ddf571b89d39a96ec7d63ecd8818f4aef33b00f479231260afe43a/rio_tiler-7.9.5-py3-none-any.whl", hash = "sha256:4000894b49093bc2f32deea7d0565f1bf362c39faade05e1737f93ab9e299383", size = 270499, upload-time = "2026-03-24T17:43:49.717Z" },
-]
-
-[[package]]
-name = "rio-tiler"
-version = "9.0.6"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15'",
-    "python_full_version >= '3.12' and python_full_version < '3.15'",
-    "python_full_version == '3.11.*'",
-]
-dependencies = [
-    { name = "attrs", marker = "python_full_version >= '3.11'" },
-    { name = "cachetools", marker = "python_full_version >= '3.11'" },
-    { name = "color-operations", marker = "python_full_version >= '3.11'" },
-    { name = "httpx", marker = "python_full_version >= '3.11'" },
-    { name = "morecantile", version = "7.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "numexpr", marker = "python_full_version >= '3.11'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pydantic", marker = "python_full_version >= '3.11'" },
-    { name = "pystac", marker = "python_full_version >= '3.11'" },
-    { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "typing-extensions", marker = "python_full_version >= '3.11' and python_full_version < '3.15'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d4/57/586669b6df34e5d164bdcaa246fd2afbb6d7a5cb512d0f68243b0bd4401b/rio_tiler-9.0.6.tar.gz", hash = "sha256:20aa64760a2dd8ee40fb3b925d62fc0a87b9e01f352456fa96d4fd5e41b19c78", size = 190893, upload-time = "2026-04-08T07:35:38.994Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/59/fab64b94bdba99b738047653d34469cac634965b1cba02578413946f5fb8/rio_tiler-9.0.6-py3-none-any.whl", hash = "sha256:6c86d6e98692d0e851bd29cc47e237aedd82450b019192f791d5a77a7b5043be", size = 287490, upload-time = "2026-04-08T07:35:37.07Z" },
 ]
 
 [[package]]
@@ -2242,50 +2191,23 @@ wheels = [
 name = "titiler-core"
 version = "0.24.2"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "fastapi", marker = "python_full_version < '3.11'" },
-    { name = "geojson-pydantic", marker = "python_full_version < '3.11'" },
-    { name = "jinja2", marker = "python_full_version < '3.11'" },
-    { name = "morecantile", version = "6.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "fastapi" },
+    { name = "geojson-pydantic" },
+    { name = "jinja2" },
+    { name = "morecantile" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pydantic", marker = "python_full_version < '3.11'" },
-    { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "rio-tiler", version = "7.9.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "simplejson", marker = "python_full_version < '3.11'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pydantic" },
+    { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "rio-tiler" },
+    { name = "simplejson" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/9e/b3e33453395f7771c43f7dd844c47b8074f4a9f636d6cd312d534d5b4cda/titiler_core-0.24.2.tar.gz", hash = "sha256:fea3253bf31bf4cfb4b53f2afe360da9c62d4e64173e72f01e70b932c2677a80", size = 71561, upload-time = "2025-10-16T15:16:37.488Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/e2/c7421adf35f6725af75b062de1a3ebdeadbc111aaca857515f5f6b1823f8/titiler_core-0.24.2-py3-none-any.whl", hash = "sha256:dc974e447b805505b45862a418128392d85a4390fc6f0b4234b0bd4a01d9c296", size = 88432, upload-time = "2025-10-16T15:16:36.083Z" },
-]
-
-[[package]]
-name = "titiler-core"
-version = "2.0.2"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.15'",
-    "python_full_version >= '3.12' and python_full_version < '3.15'",
-    "python_full_version == '3.11.*'",
-]
-dependencies = [
-    { name = "fastapi", marker = "python_full_version >= '3.11'" },
-    { name = "geojson-pydantic", marker = "python_full_version >= '3.11'" },
-    { name = "jinja2", marker = "python_full_version >= '3.11'" },
-    { name = "morecantile", version = "7.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pydantic", marker = "python_full_version >= '3.11'" },
-    { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "rio-tiler", version = "9.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "simplejson", marker = "python_full_version >= '3.11'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e5/ea/35fb336b14aff9f4df8f8defc54002ad859555c931911c979f9a0f4042e8/titiler_core-2.0.2.tar.gz", hash = "sha256:5fb7fb8a328c7a607e713827654a667d6a3e156cc6c38eb73abbeeedd39c35b9", size = 69013, upload-time = "2026-04-28T07:16:48.053Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/5c/3d61e7c4fb588c5c453537d66799b29913f0e1fbc691ce959e8b196cf580/titiler_core-2.0.2-py3-none-any.whl", hash = "sha256:5a123199bb61b31d61ddf0531f7f34f787c1b04eeafe59bd437b5758893485f4", size = 87425, upload-time = "2026-04-28T07:16:41.176Z" },
 ]
 
 [[package]]
@@ -2297,8 +2219,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "shapely" },
-    { name = "titiler-core", version = "0.24.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "titiler-core", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "titiler-core" },
 ]
 
 [package.dev-dependencies]
@@ -2324,7 +2245,7 @@ requires-dist = [
     { name = "covjson-pydantic", specifier = ">=0.7.0,<1.0" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "shapely", specifier = ">=2.0" },
-    { name = "titiler-core", specifier = ">=0.18.0" },
+    { name = "titiler-core", specifier = ">=0.18.0,<1.0" },
 ]
 
 [package.metadata.requires-dev]
