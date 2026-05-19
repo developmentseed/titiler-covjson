@@ -6,6 +6,8 @@ creating reference system objects for CoverageJSON output.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import rasterio
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
@@ -14,8 +16,6 @@ from covjson_pydantic.reference_system import (
     ReferenceSystemConnectionObject,
 )
 from covjson_pydantic.unit import Symbol, Unit
-
-TYPE_CHECKING = False
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
