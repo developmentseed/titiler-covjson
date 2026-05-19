@@ -24,8 +24,8 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
 _AUTHORITY_URI_TEMPLATES = {
-    "EPSG": "http://www.opengis.net/def/crs/EPSG/9.9.1/{}",
-    "OGC": "http://www.opengis.net/def/crs/OGC/1.3/{}",
+    "EPSG": "http://www.opengis.net/def/crs/EPSG/0/{}",
+    "OGC": "http://www.opengis.net/def/crs/OGC/0/{}",
 }
 
 
@@ -81,7 +81,7 @@ def create_spatial_2d_reference(crs_uri: str) -> ReferenceSystemConnectionObject
         >>> ref.system.type
         'GeographicCRS'
         >>> ref.system.id
-        'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
+        'http://www.opengis.net/def/crs/OGC/0/CRS84'
     """
     return ReferenceSystemConnectionObject(
         coordinates=["x", "y"],
@@ -157,14 +157,14 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
     Note:
         Supported authorities and their URI patterns:
 
-        - EPSG: ``http://www.opengis.net/def/crs/EPSG/9.9.1/{code}``
-        - OGC:  ``http://www.opengis.net/def/crs/OGC/1.3/{code}``
+        - EPSG: ``http://www.opengis.net/def/crs/EPSG/0/{code}``
+        - OGC:  ``http://www.opengis.net/def/crs/OGC/0/{code}``
 
     Examples:
         >>> crs_to_ogc_uri(rasterio.CRS.from_epsg(4326))
-        'http://www.opengis.net/def/crs/EPSG/9.9.1/4326'
+        'http://www.opengis.net/def/crs/EPSG/0/4326'
         >>> crs_to_ogc_uri(rasterio.CRS.from_string("OGC:CRS84"))
-        'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
+        'http://www.opengis.net/def/crs/OGC/0/CRS84'
     """
 
     if (authority_info := crs.to_authority()) is not None:
