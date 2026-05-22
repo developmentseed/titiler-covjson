@@ -16,12 +16,16 @@ from covjson_pydantic.reference_system import (
     ReferenceSystemConnectionObject,
 )
 from covjson_pydantic.unit import Symbol, Unit
+from lark.exceptions import UnexpectedEOF, UnexpectedInput
+from ucumvert import PintUcumRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Any
 
     import numpy.typing as npt
+
+_ureg = PintUcumRegistry()
 
 _AUTHORITY_URI_TEMPLATES = {
     "EPSG": "http://www.opengis.net/def/crs/EPSG/0/{}",
@@ -132,17 +136,20 @@ def create_temporal_reference() -> ReferenceSystemConnectionObject:
 
 
 def create_unit(ucum_code: str) -> Unit | None:
-    """Return a CoverageJSON Unit for a recognised UCUM code, or None.
+    """Return a CoverageJSON Unit for a valid UCUM code, or None.
 
     Each Unit carries an English label and a UCUM ``Symbol`` (type
-    ``"http://www.opengis.net/def/uom/UCUM/"``).
+    ``"http://www.opengis.net/def/uom/UCUM/"``). The curated lookup table
+    provides preferred English labels for common codes; any other valid UCUM
+    code falls back to a label derived from pint's canonical unit name.
+    Invalid UCUM codes return ``None``.
 
     Args:
         ucum_code: A UCUM unit code (case-sensitive).
 
     Returns:
-        Unit | None: A fully-specified Unit, or None if the code is
-            not in the lookup table.
+        Unit | None: A fully-specified Unit, or None if the code is not
+            valid UCUM.
 
     Examples:
         >>> u = create_unit("mm")
@@ -150,10 +157,24 @@ def create_unit(ucum_code: str) -> Unit | None:
         {'en': 'millimeters'}
         >>> u.symbol.value
         'mm'
+        >>> u = create_unit("Hz")
+        >>> u.label
+        {'en': 'hertz'}
+        >>> u.symbol.value
+        'Hz'
         >>> create_unit("furlongs") is None
         True
     """
-    return _UCUM_CODE_TO_UNIT.get(ucum_code)
+    if curated := _UCUM_CODE_TO_UNIT.get(ucum_code):
+        return curated
+    try:
+        quantity = _ureg.from_ucum(ucum_code)
+    except (UnexpectedInput, UnexpectedEOF):
+        return None
+    return Unit(
+        label={"en": f"{quantity.units:P}"},
+        symbol=Symbol(value=ucum_code, type="http://www.opengis.net/def/uom/UCUM/"),
+    )
 
 
 def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
