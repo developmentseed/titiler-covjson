@@ -28,8 +28,12 @@ if TYPE_CHECKING:
 _ureg = PintUcumRegistry()
 
 _AUTHORITY_URI_TEMPLATES = {
+    # EPSG register items are unversioned; "0" is the OGC convention for
+    # "latest version" of the (unversioned) authority.
     "EPSG": "http://www.opengis.net/def/crs/EPSG/0/{}",
-    "OGC": "http://www.opengis.net/def/crs/OGC/0/{}",
+    # The OGC namespace IS versioned; CRS84 lives under 1.3 (CRS84h lives
+    # under 0). See https://www.opengis.net/def/crs/OGC/ for the enumeration.
+    "OGC": "http://www.opengis.net/def/crs/OGC/1.3/{}",
 }
 
 
@@ -86,7 +90,7 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
         >>> ref.system.type
         'GeographicCRS'
         >>> ref.system.id
-        'http://www.opengis.net/def/crs/OGC/0/CRS84'
+        'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
 
         Create a reference for a Projected CRS:
 
@@ -193,13 +197,13 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
         Supported authorities and their URI patterns:
 
         - EPSG: ``http://www.opengis.net/def/crs/EPSG/0/{code}``
-        - OGC:  ``http://www.opengis.net/def/crs/OGC/0/{code}``
+        - OGC:  ``http://www.opengis.net/def/crs/OGC/1.3/{code}``
 
     Examples:
         >>> crs_to_ogc_uri(rasterio.CRS.from_epsg(4326))
         'http://www.opengis.net/def/crs/EPSG/0/4326'
         >>> crs_to_ogc_uri(rasterio.CRS.from_string("OGC:CRS84"))
-        'http://www.opengis.net/def/crs/OGC/0/CRS84'
+        'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
     """
 
     if (authority_info := crs.to_authority()) is not None:
