@@ -31,7 +31,7 @@ its output is structurally consistent with the spec and also round-trips stably.
 #   TiledNdArrayInt / TiledNdArrayStr —- the spec allows integer and string
 #   dataType on TiledNdArray objects, but no model class exists for them.
 #   Only TiledNdArrayFloat is implemented (see coverage.py NdArrayTypes and
-#   ndarray.py).
+#   ndarray.py). Upstream issue: https://github.com/KNMI/covjson-pydantic/issues/31
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from typing import Any
 import numpy as np
 import pytest
 import rasterio
-from conftest import parse, roundtrip, roundtrip_is_stable
+from conftest import assert_schema_valid, parse, roundtrip, roundtrip_is_stable
 from covjson_pydantic.domain import Domain, ValuesAxis
 from covjson_pydantic.ndarray import (
     NdArrayFloat,
@@ -193,6 +193,10 @@ class TestSection93Parameter:
         """Spec 9.3 continuous SST parameter round-trips to identical JSON."""
         assert roundtrip_is_stable(Parameter, self.SPEC_SST)
 
+    def test_spec_sst_parameter_schema_valid(self) -> None:
+        """Spec 9.3 SST parameter validates against the schema 'parameter' def."""
+        assert_schema_valid(parse(Parameter, self.SPEC_SST), "parameter")
+
     def test_spec_land_cover_parses(self) -> None:
         """Spec 9.3 categorical land cover parameter parses correctly."""
         p = parse(Parameter, self.SPEC_LAND_COVER)
@@ -211,6 +215,10 @@ class TestSection93Parameter:
     def test_spec_land_cover_roundtrip_stable(self) -> None:
         """Spec 9.3 categorical land cover parameter round-trips stably."""
         assert roundtrip_is_stable(Parameter, self.SPEC_LAND_COVER)
+
+    def test_spec_land_cover_schema_valid(self) -> None:
+        """Spec 9.3 land cover parameter validates against the 'parameter' def."""
+        assert_schema_valid(parse(Parameter, self.SPEC_LAND_COVER), "parameter")
 
     def test_spec_land_cover_model_dump_roundtrip(self) -> None:
         """Land cover categoryEncoding survives model_dump() round-trip."""
@@ -263,6 +271,12 @@ class TestSection94ParameterGroup:
         """Spec 9.4 wind velocity group round-trips to identical JSON."""
         assert roundtrip_is_stable(ParameterGroup, self.SPEC_WIND_GROUP)
 
+    def test_spec_wind_group_schema_valid(self) -> None:
+        """Spec 9.4 wind group validates against the 'parameterGroup' def."""
+        assert_schema_valid(
+            parse(ParameterGroup, self.SPEC_WIND_GROUP), "parameterGroup"
+        )
+
     def test_spec_sst_uncertainty_group_parses(self) -> None:
         """Spec 9.4 SST uncertainty group parses with label and members."""
         g = parse(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP)
@@ -276,6 +290,12 @@ class TestSection94ParameterGroup:
     def test_spec_sst_uncertainty_group_roundtrip_stable(self) -> None:
         """Spec 9.4 SST uncertainty group round-trips to identical JSON."""
         assert roundtrip_is_stable(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP)
+
+    def test_spec_sst_uncertainty_group_schema_valid(self) -> None:
+        """Spec 9.4 SST uncertainty group validates against the 'parameterGroup' def."""
+        assert_schema_valid(
+            parse(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP), "parameterGroup"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +577,10 @@ class TestSection96GridDomain:
         """Spec 9.6 Grid Domain round-trips to identical JSON."""
         assert roundtrip_is_stable(Domain, self.SPEC_GRID_DOMAIN)
 
+    def test_spec_grid_domain_schema_valid(self) -> None:
+        """Spec 9.6 Grid Domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.SPEC_GRID_DOMAIN), "domain")
+
     def test_spec_grid_domain_referencing_preserved(self) -> None:
         """Spec 9.6 Grid Domain referencing types survive round-trip."""
         result = roundtrip(Domain, self.SPEC_GRID_DOMAIN)
@@ -610,6 +634,10 @@ class TestSection96TrajectoryDomain:
         """Spec 9.6 Trajectory Domain round-trips to identical JSON."""
         assert roundtrip_is_stable(Domain, self.SPEC_TRAJECTORY_DOMAIN)
 
+    def test_spec_trajectory_domain_schema_valid(self) -> None:
+        """Spec 9.6 Trajectory Domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.SPEC_TRAJECTORY_DOMAIN), "domain")
+
     def test_spec_trajectory_composite_coordinates_preserved(self) -> None:
         """Spec 9.6 Trajectory composite axis coordinates survive round-trip."""
         result = roundtrip(Domain, self.SPEC_TRAJECTORY_DOMAIN)
@@ -661,6 +689,10 @@ class TestSection96MultiPoint:
     def test_spec_multi_point_roundtrip_stable(self) -> None:
         """MultiPoint domain round-trips to identical JSON."""
         assert roundtrip_is_stable(Domain, self.SPEC_MULTI_POINT)
+
+    def test_spec_multi_point_schema_valid(self) -> None:
+        """MultiPoint domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.SPEC_MULTI_POINT), "domain")
 
 
 class TestSection96MultiPointSeries:
@@ -718,6 +750,10 @@ class TestSection96MultiPointSeries:
         """MultiPointSeries domain round-trips to identical JSON."""
         assert roundtrip_is_stable(Domain, self.SPEC_MULTI_POINT_SERIES)
 
+    def test_spec_multi_point_series_schema_valid(self) -> None:
+        """MultiPointSeries domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.SPEC_MULTI_POINT_SERIES), "domain")
+
 
 # ---------------------------------------------------------------------------
 # Section 9.6.2 – NdArray objects
@@ -754,6 +790,10 @@ class TestSection962NdArrayRoundtrip:
     def test_spec_ndarray_float_roundtrip_stable(self) -> None:
         """Spec 9.6.2 float NdArray round-trips to identical JSON."""
         assert roundtrip_is_stable(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
+
+    def test_spec_ndarray_float_schema_valid(self) -> None:
+        """Spec 9.6.2 float NdArray validates against the schema 'ndArray' def."""
+        assert_schema_valid(parse(NdArrayFloat, self.SPEC_NDARRAY_FLOAT), "ndArray")
 
     def test_spec_ndarray_null_values_survive_roundtrip(self) -> None:
         """Null values in the spec example remain null after serialisation."""
@@ -818,6 +858,10 @@ class TestSection962NdArrayStr:
         """String NdArray round-trips to identical JSON."""
         assert roundtrip_is_stable(NdArrayStr, self.SPEC_NDARRAY_STR)
 
+    def test_spec_ndarray_string_schema_valid(self) -> None:
+        """String NdArray validates against the schema 'ndArray' def."""
+        assert_schema_valid(parse(NdArrayStr, self.SPEC_NDARRAY_STR), "ndArray")
+
     def test_spec_ndarray_string_null_preserved(self) -> None:
         """Null element in string NdArray survives round-trip as null."""
         result = roundtrip(NdArrayStr, self.SPEC_NDARRAY_STR)
@@ -829,6 +873,11 @@ class TestSection962TiledNdArrayFloat:
 
     The model only implements ``TiledNdArrayFloat``; integer and string tiled
     arrays (present in the playground ``grid-tiled.covjson``) cannot be parsed.
+    Upstream issue (covjson-pydantic missing TiledNdArrayInt/Str):
+    https://github.com/KNMI/covjson-pydantic/issues/31
+
+    No ``test_schema_valid`` here: the vendored schema has no ``TiledNdArray``
+    definition (only ``ndArray``), so there is nothing to validate against.
     """
 
     SPEC_TILED: dict[str, Any] = {

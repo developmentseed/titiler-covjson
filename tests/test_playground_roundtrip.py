@@ -24,6 +24,7 @@ documented in the test-class docstring.
 #   (2) The range uses TiledNdArray with dataType "integer"; the model only
 #       provides TiledNdArrayFloat (dataType "float").  Integer and string
 #       tiled arrays are noted as TODO in covjson-pydantic/ndarray.py.
+#       Upstream issue: https://github.com/KNMI/covjson-pydantic/issues/31
 #
 # multipolygon.covjson is blocked because "MultiPolygon" is absent from the
 # DomainType enum.  The following spec types share this limitation and also
@@ -35,7 +36,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conftest import parse, roundtrip, roundtrip_is_stable
+from conftest import assert_schema_valid, parse, roundtrip, roundtrip_is_stable
 from covjson_pydantic.coverage import Coverage, CoverageCollection
 from covjson_pydantic.domain import CompactAxis, Domain, ValuesAxis
 
@@ -120,6 +121,10 @@ class TestPlaygroundGrid:
     def test_roundtrip_stable(self) -> None:
         """Playground grid.covjson Coverage round-trips to identical JSON."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground grid.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
 
 
 class TestPlaygroundGridCategorical:
@@ -216,6 +221,10 @@ class TestPlaygroundGridCategorical:
         """Playground grid-categorical.covjson Coverage round-trips stably."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
+    def test_schema_valid(self) -> None:
+        """Playground grid-categorical.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
+
 
 class TestPlaygroundGridDomainBng:
     """Playground grid-domain-bng.covjson: Domain-only, CompactAxis, ProjectedCRS."""
@@ -266,6 +275,10 @@ class TestPlaygroundGridDomainBng:
         """Playground BNG domain round-trips to identical JSON."""
         assert roundtrip_is_stable(Domain, self.EXAMPLE)
 
+    def test_schema_valid(self) -> None:
+        """Playground BNG domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.EXAMPLE), "domain")
+
 
 class TestPlaygroundGridDomain:
     """Playground grid-domain.covjson: Domain-only / Grid / CompactAxis / GeographicCRS.
@@ -315,6 +328,10 @@ class TestPlaygroundGridDomain:
     def test_roundtrip_stable(self) -> None:
         """Playground grid-domain.covjson Domain round-trips to identical JSON."""
         assert roundtrip_is_stable(Domain, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground grid-domain.covjson Domain validates against the 'domain' def."""
+        assert_schema_valid(parse(Domain, self.EXAMPLE), "domain")
 
 
 class TestPlaygroundPoint:
@@ -427,6 +444,10 @@ class TestPlaygroundPoint:
     def test_roundtrip_stable(self) -> None:
         """Playground point.covjson Coverage round-trips to identical JSON."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground point.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
 
 
 class TestPlaygroundPointSeries:
@@ -542,6 +563,10 @@ class TestPlaygroundPointSeries:
     def test_roundtrip_stable(self) -> None:
         """Playground pointseries.covjson Coverage round-trips stably."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground pointseries.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
 
 
 class TestPlaygroundProfile:
@@ -738,6 +763,10 @@ class TestPlaygroundProfile:
         """Playground profile.covjson Coverage round-trips stably."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
+    def test_schema_valid(self) -> None:
+        """Playground profile.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
+
 
 class TestPlaygroundTrajectory:
     """Playground trajectory.covjson: Coverage / Trajectory / 4-coord composite."""
@@ -826,6 +855,10 @@ class TestPlaygroundTrajectory:
     def test_roundtrip_stable(self) -> None:
         """Playground trajectory.covjson Coverage round-trips stably."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground trajectory.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
 
 
 class TestPlaygroundPointCollection:
@@ -964,6 +997,10 @@ class TestPlaygroundPointCollection:
         """Playground point-collection.covjson CoverageCollection round-trips stably."""
         assert roundtrip_is_stable(CoverageCollection, self.EXAMPLE)
 
+    def test_schema_valid(self) -> None:
+        """Playground point-collection.covjson validates against the schema."""
+        assert_schema_valid(parse(CoverageCollection, self.EXAMPLE))
+
 
 class TestPlaygroundProfileCollection:
     """Playground profile-collection.covjson: CoverageCollection / VerticalProfile."""
@@ -1096,6 +1133,10 @@ class TestPlaygroundProfileCollection:
         """Playground profile-collection.covjson round-trips stably."""
         assert roundtrip_is_stable(CoverageCollection, self.EXAMPLE)
 
+    def test_schema_valid(self) -> None:
+        """Playground profile-collection.covjson validates against the schema."""
+        assert_schema_valid(parse(CoverageCollection, self.EXAMPLE))
+
 
 class TestPlaygroundPolygonSeries:
     """Playground polygonseries.covjson: Coverage / PolygonSeries / TEMP.
@@ -1222,3 +1263,7 @@ class TestPlaygroundPolygonSeries:
     def test_roundtrip_stable(self) -> None:
         """Playground polygonseries.covjson Coverage round-trips stably."""
         assert roundtrip_is_stable(Coverage, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground polygonseries.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
