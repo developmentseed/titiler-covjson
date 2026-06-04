@@ -305,7 +305,7 @@ class TestSection951GeographicCRS:
     """Spec section 9.5.1.1: Geographic CRS."""
 
     # Spec example uses the specific /1.3/ versioned URI for OGC CRS84.
-    # The helper uses /0/ (version-independent form) per OGC best practice.
+    # Both spec and helper use the OGC-versioned URI .../OGC/1.3/CRS84
     SPEC_GEO_CRS84: dict[str, Any] = {
         "type": "GeographicCRS",
         "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
