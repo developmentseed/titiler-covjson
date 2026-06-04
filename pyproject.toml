@@ -98,5 +98,5 @@ module = ["ucumvert", "ucumvert.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["tests.*"]
+module = ["conftest", "test_helpers", "test_playground_roundtrip", "test_spec_roundtrip"]
 disallow_untyped_calls = false

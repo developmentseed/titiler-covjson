@@ -35,13 +35,13 @@ its output is structurally consistent with the spec and also round-trips stably.
 
 from __future__ import annotations
 
-import json
 import math
-from typing import Any, TypeVar
+from typing import Any
 
 import numpy as np
 import pytest
 import rasterio
+from conftest import parse, roundtrip, roundtrip_is_stable
 from covjson_pydantic.domain import Domain, ValuesAxis
 from covjson_pydantic.ndarray import (
     NdArrayFloat,
@@ -55,7 +55,6 @@ from covjson_pydantic.reference_system import (
     ReferenceSystemConnectionObject,
 )
 from covjson_pydantic.unit import Symbol, Unit
-from pydantic import BaseModel
 
 from titiler_covjson.helpers import (
     create_spatial_2d_reference,
@@ -63,27 +62,6 @@ from titiler_covjson.helpers import (
     create_unit,
     numpy_dtype_to_ndarray,
 )
-
-_M = TypeVar("_M", bound=BaseModel)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse(cls: type[_M], data: dict[str, Any]) -> _M:
-    return cls.model_validate_json(json.dumps(data), strict=True)
-
-
-def _roundtrip(cls: type[BaseModel], data: dict[str, Any]) -> dict[str, Any]:
-    assert isinstance(obj := json.loads(_parse(cls, data).model_dump_json()), dict)
-    return obj
-
-
-def _roundtrip_is_stable(cls: type[BaseModel], data: dict[str, Any]) -> bool:
-    first = _roundtrip(cls, data)
-    second = _roundtrip(cls, first)
-    return first == second
 
 
 class TestSection93Units:
@@ -110,22 +88,26 @@ class TestSection93Units:
 
     def test_spec_unit_celsius_parses(self) -> None:
         """Spec 9.3 Celsius unit example parses with correct symbol."""
-        unit = _parse(Unit, self.SPEC_UNIT_CELSIUS)
-        assert unit.symbol == Symbol(value="Cel", type="http://www.opengis.net/def/uom/UCUM/")
+        unit = parse(Unit, self.SPEC_UNIT_CELSIUS)
+        assert unit.symbol == Symbol(
+            value="Cel", type="http://www.opengis.net/def/uom/UCUM/"
+        )
 
     def test_spec_unit_celsius_roundtrip_stable(self) -> None:
         """Spec Celsius unit example round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Unit, self.SPEC_UNIT_CELSIUS)
+        assert roundtrip_is_stable(Unit, self.SPEC_UNIT_CELSIUS)
 
     def test_spec_unit_kelvin_roundtrip_stable(self) -> None:
         """Spec Kelvin unit example round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Unit, self.SPEC_UNIT_KELVIN)
+        assert roundtrip_is_stable(Unit, self.SPEC_UNIT_KELVIN)
 
     def test_helper_unit_celsius_symbol_matches_spec(self) -> None:
         """create_unit('Cel') produces a UCUM symbol matching the spec 9.3 example."""
         unit = create_unit("Cel")
         assert unit is not None
-        assert unit.symbol == Symbol(value="Cel", type="http://www.opengis.net/def/uom/UCUM/")
+        assert unit.symbol == Symbol(
+            value="Cel", type="http://www.opengis.net/def/uom/UCUM/"
+        )
 
     def test_helper_unit_kelvin_label_and_symbol_match_spec(self) -> None:
         """create_unit('K') produces the correct Kelvin label and UCUM symbol."""
@@ -141,7 +123,7 @@ class TestSection93Units:
         unit = create_unit("Cel")
         assert unit is not None
         first = unit.model_dump()
-        second = _parse(Unit, first).model_dump()
+        second = parse(Unit, first).model_dump()
         assert first == second
 
 
@@ -200,7 +182,7 @@ class TestSection93Parameter:
 
     def test_spec_sst_parameter_parses(self) -> None:
         """Spec 9.3 continuous SST parameter parses with correct unit symbol."""
-        p = _parse(Parameter, self.SPEC_SST)
+        p = parse(Parameter, self.SPEC_SST)
         assert p.unit is not None
         assert not isinstance(p.unit.symbol, str)
         assert p.unit.symbol is not None
@@ -209,11 +191,11 @@ class TestSection93Parameter:
 
     def test_spec_sst_parameter_roundtrip_stable(self) -> None:
         """Spec 9.3 continuous SST parameter round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Parameter, self.SPEC_SST)
+        assert roundtrip_is_stable(Parameter, self.SPEC_SST)
 
     def test_spec_land_cover_parses(self) -> None:
         """Spec 9.3 categorical land cover parameter parses correctly."""
-        p = _parse(Parameter, self.SPEC_LAND_COVER)
+        p = parse(Parameter, self.SPEC_LAND_COVER)
         assert p.unit is None
         assert p.observedProperty.categories is not None
         assert len(p.observedProperty.categories) == 2
@@ -228,13 +210,13 @@ class TestSection93Parameter:
 
     def test_spec_land_cover_roundtrip_stable(self) -> None:
         """Spec 9.3 categorical land cover parameter round-trips stably."""
-        assert _roundtrip_is_stable(Parameter, self.SPEC_LAND_COVER)
+        assert roundtrip_is_stable(Parameter, self.SPEC_LAND_COVER)
 
     def test_spec_land_cover_model_dump_roundtrip(self) -> None:
         """Land cover categoryEncoding survives model_dump() round-trip."""
-        p = _parse(Parameter, self.SPEC_LAND_COVER)
+        p = parse(Parameter, self.SPEC_LAND_COVER)
         first = p.model_dump()
-        second = _parse(Parameter, first).model_dump()
+        second = parse(Parameter, first).model_dump()
         assert first == second
         assert first["categoryEncoding"][
             "http://example.com/land_cover/categories/forest"
@@ -271,7 +253,7 @@ class TestSection94ParameterGroup:
 
     def test_spec_wind_group_parses(self) -> None:
         """Spec 9.4 wind velocity group parses with correct members."""
-        g = _parse(ParameterGroup, self.SPEC_WIND_GROUP)
+        g = parse(ParameterGroup, self.SPEC_WIND_GROUP)
         assert g.type == "ParameterGroup"
         assert g.members == ["WIND_SPEED", "WIND_DIR"]
         assert g.observedProperty is not None
@@ -279,11 +261,11 @@ class TestSection94ParameterGroup:
 
     def test_spec_wind_group_roundtrip_stable(self) -> None:
         """Spec 9.4 wind velocity group round-trips to identical JSON."""
-        assert _roundtrip_is_stable(ParameterGroup, self.SPEC_WIND_GROUP)
+        assert roundtrip_is_stable(ParameterGroup, self.SPEC_WIND_GROUP)
 
     def test_spec_sst_uncertainty_group_parses(self) -> None:
         """Spec 9.4 SST uncertainty group parses with label and members."""
-        g = _parse(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP)
+        g = parse(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP)
         assert g.type == "ParameterGroup"
         assert g.members == ["SST_mean", "SST_stddev"]
         assert g.label == {
@@ -293,7 +275,7 @@ class TestSection94ParameterGroup:
 
     def test_spec_sst_uncertainty_group_roundtrip_stable(self) -> None:
         """Spec 9.4 SST uncertainty group round-trips to identical JSON."""
-        assert _roundtrip_is_stable(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP)
+        assert roundtrip_is_stable(ParameterGroup, self.SPEC_SST_UNCERTAINTY_GROUP)
 
 
 # ---------------------------------------------------------------------------
@@ -317,19 +299,19 @@ class TestSection951GeographicCRS:
 
     def test_spec_geographic_crs84_parses(self) -> None:
         """Spec 9.5.1.1 GeographicCRS (OGC CRS84) example parses correctly."""
-        rs = _parse(ReferenceSystem, self.SPEC_GEO_CRS84)
+        rs = parse(ReferenceSystem, self.SPEC_GEO_CRS84)
         assert rs.type == "GeographicCRS"
         assert rs.id == "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
 
     def test_spec_geographic_crs84_connection_roundtrip_stable(self) -> None:
         """Spec GeographicCRS (OGC CRS84) connection object round-trips stably."""
         spec = {"coordinates": ["x", "y"], "system": self.SPEC_GEO_CRS84}
-        assert _roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
+        assert roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
 
     def test_spec_geographic_epsg4979_roundtrip_stable(self) -> None:
         """Spec GeographicCRS (EPSG:4979, 3-D) connection object round-trips stably."""
         spec = {"coordinates": ["y", "x", "z"], "system": self.SPEC_GEO_EPSG4979}
-        assert _roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
+        assert roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
 
     def test_helper_geographic_crs84_type_and_uri(self) -> None:
         """create_spatial_2d_reference(CRS84) produces GeographicCRS with spec URI."""
@@ -348,7 +330,7 @@ class TestSection951GeographicCRS:
         """create_spatial_2d_reference(CRS84) output round-trips to identical JSON."""
         ref = create_spatial_2d_reference(rasterio.CRS.from_string("OGC:CRS84"))
         first = ref.model_dump()
-        second = _parse(ReferenceSystemConnectionObject, first).model_dump()
+        second = parse(ReferenceSystemConnectionObject, first).model_dump()
         assert first == second
 
 
@@ -367,14 +349,14 @@ class TestSection951ProjectedCRS:
 
     def test_spec_projected_crs_parses(self) -> None:
         """Spec 9.5.1.2 ProjectedCRS (EPSG:27700) example parses correctly."""
-        rs = _parse(ReferenceSystem, self.SPEC_PROJ_27700)
+        rs = parse(ReferenceSystem, self.SPEC_PROJ_27700)
         assert rs.type == "ProjectedCRS"
         assert rs.id == "http://www.opengis.net/def/crs/EPSG/0/27700"
 
     def test_spec_projected_crs_connection_roundtrip_stable(self) -> None:
         """Spec ProjectedCRS (EPSG:27700) connection object round-trips stably."""
         spec = {"coordinates": ["x", "y"], "system": self.SPEC_PROJ_27700}
-        assert _roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
+        assert roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
 
     def test_helper_projected_epsg27700_type_and_uri(self) -> None:
         """EPSG:27700 yields ProjectedCRS with URI matching spec 9.5.1.2."""
@@ -387,7 +369,7 @@ class TestSection951ProjectedCRS:
         """EPSG:32637 output from create_spatial_2d_reference round-trips stably."""
         ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(32637))
         first = ref.model_dump()
-        second = _parse(ReferenceSystemConnectionObject, first).model_dump()
+        second = parse(ReferenceSystemConnectionObject, first).model_dump()
         assert first == second
         assert first["system"]["type"] == "ProjectedCRS"
         assert first["system"]["id"] == "http://www.opengis.net/def/crs/EPSG/0/32637"
@@ -408,14 +390,14 @@ class TestSection951VerticalCRS:
 
     def test_spec_vertical_crs_parses(self) -> None:
         """Spec 9.5.1.3 VerticalCRS (EPSG:5703) example parses correctly."""
-        rs = _parse(ReferenceSystem, self.SPEC_VERT_EPSG5703)
+        rs = parse(ReferenceSystem, self.SPEC_VERT_EPSG5703)
         assert rs.type == "VerticalCRS"
         assert rs.id == "http://www.opengis.net/def/crs/EPSG/0/5703"
 
     def test_spec_vertical_crs_connection_roundtrip_stable(self) -> None:
         """Spec VerticalCRS (EPSG:5703) connection object round-trips stably."""
         spec = {"coordinates": ["z"], "system": self.SPEC_VERT_EPSG5703}
-        assert _roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
+        assert roundtrip_is_stable(ReferenceSystemConnectionObject, spec)
 
 
 # ---------------------------------------------------------------------------
@@ -440,13 +422,13 @@ class TestSection952TemporalRS:
 
     def test_spec_temporal_rs_parses(self) -> None:
         """Spec 9.5.2 TemporalRS example parses with correct type and calendar."""
-        rs = _parse(ReferenceSystem, self.SPEC_TEMPORAL_RS)
+        rs = parse(ReferenceSystem, self.SPEC_TEMPORAL_RS)
         assert rs.type == "TemporalRS"
         assert rs.calendar == "Gregorian"
 
     def test_spec_temporal_connection_roundtrip_stable(self) -> None:
         """Spec temporal reference connection object round-trips stably."""
-        assert _roundtrip_is_stable(
+        assert roundtrip_is_stable(
             ReferenceSystemConnectionObject, self.SPEC_TEMPORAL_CONNECTION
         )
 
@@ -461,7 +443,7 @@ class TestSection952TemporalRS:
         """create_temporal_reference() output round-trips to identical JSON."""
         ref = create_temporal_reference()
         first = ref.model_dump()
-        second = _parse(ReferenceSystemConnectionObject, first).model_dump()
+        second = parse(ReferenceSystemConnectionObject, first).model_dump()
         assert first == second
 
 
@@ -495,7 +477,7 @@ class TestSection953IdentifierRS:
 
     def test_spec_identifier_rs_parses(self) -> None:
         """Spec 9.5.3 IdentifierRS example parses with correct fields."""
-        rs = _parse(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
+        rs = parse(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
         assert rs.type == "IdentifierRS"
         assert rs.id == "https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2"
         assert rs.label == {"en": "ISO 3166-1 alpha-2 codes"}
@@ -506,11 +488,11 @@ class TestSection953IdentifierRS:
 
     def test_spec_identifier_rs_roundtrip_stable(self) -> None:
         """Spec 9.5.3 IdentifierRS example round-trips to identical JSON."""
-        assert _roundtrip_is_stable(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
+        assert roundtrip_is_stable(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
 
     def test_spec_identifier_rs_multilingual_labels_preserved(self) -> None:
         """Both language tags survive round-trip serialisation."""
-        result = _roundtrip(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
+        result = roundtrip(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
         assert result["identifiers"]["gb"]["label"]["de"] == "Vereinigtes Königreich"
         assert result["identifiers"]["gb"]["label"]["en"] == "United Kingdom"
         assert result["targetConcept"]["label"]["de"] == "Land"
@@ -551,7 +533,7 @@ class TestSection96GridDomain:
 
     def test_spec_grid_domain_parses(self) -> None:
         """Spec 9.6 Grid Domain example parses correctly."""
-        domain = _parse(Domain, self.SPEC_GRID_DOMAIN)
+        domain = parse(Domain, self.SPEC_GRID_DOMAIN)
         assert domain.domainType is not None
         assert domain.domainType.value == "Grid"
         assert domain.axes.x is not None
@@ -563,7 +545,7 @@ class TestSection96GridDomain:
 
     def test_spec_grid_domain_axis_values(self) -> None:
         """Spec 9.6 Grid Domain x, y, z axis values parse with correct lengths."""
-        domain = _parse(Domain, self.SPEC_GRID_DOMAIN)
+        domain = parse(Domain, self.SPEC_GRID_DOMAIN)
         assert isinstance(domain.axes.x, ValuesAxis)
         assert len(domain.axes.x.values) == 3
         assert isinstance(domain.axes.y, ValuesAxis)
@@ -573,11 +555,11 @@ class TestSection96GridDomain:
 
     def test_spec_grid_domain_roundtrip_stable(self) -> None:
         """Spec 9.6 Grid Domain round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Domain, self.SPEC_GRID_DOMAIN)
+        assert roundtrip_is_stable(Domain, self.SPEC_GRID_DOMAIN)
 
     def test_spec_grid_domain_referencing_preserved(self) -> None:
         """Spec 9.6 Grid Domain referencing types survive round-trip."""
-        result = _roundtrip(Domain, self.SPEC_GRID_DOMAIN)
+        result = roundtrip(Domain, self.SPEC_GRID_DOMAIN)
         assert result["referencing"] is not None
         system_types = {ref["system"]["type"] for ref in result["referencing"]}
         assert "TemporalRS" in system_types
@@ -618,7 +600,7 @@ class TestSection96TrajectoryDomain:
 
     def test_spec_trajectory_domain_parses(self) -> None:
         """Spec 9.6 Trajectory Domain example parses correctly."""
-        domain = _parse(Domain, self.SPEC_TRAJECTORY_DOMAIN)
+        domain = parse(Domain, self.SPEC_TRAJECTORY_DOMAIN)
         assert domain.domainType is not None
         assert domain.domainType.value == "Trajectory"
         assert domain.axes.composite is not None
@@ -626,11 +608,11 @@ class TestSection96TrajectoryDomain:
 
     def test_spec_trajectory_domain_roundtrip_stable(self) -> None:
         """Spec 9.6 Trajectory Domain round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Domain, self.SPEC_TRAJECTORY_DOMAIN)
+        assert roundtrip_is_stable(Domain, self.SPEC_TRAJECTORY_DOMAIN)
 
     def test_spec_trajectory_composite_coordinates_preserved(self) -> None:
         """Spec 9.6 Trajectory composite axis coordinates survive round-trip."""
-        result = _roundtrip(Domain, self.SPEC_TRAJECTORY_DOMAIN)
+        result = roundtrip(Domain, self.SPEC_TRAJECTORY_DOMAIN)
         composite = result["axes"]["composite"]
         assert composite["dataType"] == "tuple"
         assert composite["coordinates"] == ["t", "x", "y"]
@@ -663,7 +645,7 @@ class TestSection96MultiPoint:
 
     def test_spec_multi_point_parses(self) -> None:
         """MultiPoint domain parses with composite axis and no t axis."""
-        domain = _parse(Domain, self.SPEC_MULTI_POINT)
+        domain = parse(Domain, self.SPEC_MULTI_POINT)
         assert domain.domainType is not None
         assert domain.domainType.value == "MultiPoint"
         assert domain.axes.composite is not None
@@ -671,14 +653,14 @@ class TestSection96MultiPoint:
 
     def test_spec_multi_point_composite_values(self) -> None:
         """MultiPoint composite axis carries three (x, y) coordinate pairs."""
-        domain = _parse(Domain, self.SPEC_MULTI_POINT)
+        domain = parse(Domain, self.SPEC_MULTI_POINT)
         assert domain.axes.composite is not None
         assert domain.axes.composite.coordinates == ["x", "y"]
         assert len(domain.axes.composite.values) == 3
 
     def test_spec_multi_point_roundtrip_stable(self) -> None:
         """MultiPoint domain round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Domain, self.SPEC_MULTI_POINT)
+        assert roundtrip_is_stable(Domain, self.SPEC_MULTI_POINT)
 
 
 class TestSection96MultiPointSeries:
@@ -718,7 +700,7 @@ class TestSection96MultiPointSeries:
 
     def test_spec_multi_point_series_parses(self) -> None:
         """MultiPointSeries domain parses with both composite and t axes."""
-        domain = _parse(Domain, self.SPEC_MULTI_POINT_SERIES)
+        domain = parse(Domain, self.SPEC_MULTI_POINT_SERIES)
         assert domain.domainType is not None
         assert domain.domainType.value == "MultiPointSeries"
         assert domain.axes.composite is not None
@@ -726,7 +708,7 @@ class TestSection96MultiPointSeries:
 
     def test_spec_multi_point_series_axes(self) -> None:
         """MultiPointSeries has two points and three time steps."""
-        domain = _parse(Domain, self.SPEC_MULTI_POINT_SERIES)
+        domain = parse(Domain, self.SPEC_MULTI_POINT_SERIES)
         assert domain.axes.composite is not None
         assert len(domain.axes.composite.values) == 2
         assert isinstance(domain.axes.t, ValuesAxis)
@@ -734,7 +716,7 @@ class TestSection96MultiPointSeries:
 
     def test_spec_multi_point_series_roundtrip_stable(self) -> None:
         """MultiPointSeries domain round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Domain, self.SPEC_MULTI_POINT_SERIES)
+        assert roundtrip_is_stable(Domain, self.SPEC_MULTI_POINT_SERIES)
 
 
 # ---------------------------------------------------------------------------
@@ -759,7 +741,7 @@ class TestSection962NdArrayRoundtrip:
 
     def test_spec_ndarray_float_parses(self) -> None:
         """Spec 9.6.2 float NdArray example parses into NdArrayFloat."""
-        nd = _parse(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
+        nd = parse(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
         assert nd.dataType == "float"
         assert nd.shape == [4, 2]
         assert nd.axisNames == ["y", "x"]
@@ -771,11 +753,11 @@ class TestSection962NdArrayRoundtrip:
 
     def test_spec_ndarray_float_roundtrip_stable(self) -> None:
         """Spec 9.6.2 float NdArray round-trips to identical JSON."""
-        assert _roundtrip_is_stable(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
+        assert roundtrip_is_stable(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
 
     def test_spec_ndarray_null_values_survive_roundtrip(self) -> None:
         """Null values in the spec example remain null after serialisation."""
-        result = _roundtrip(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
+        result = roundtrip(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
         assert result["values"][4] is None
         assert result["values"][5] is None
 
@@ -807,7 +789,7 @@ class TestSection962NdArrayRoundtrip:
         first = nd.model_dump()
         assert first["dataType"] == "integer"
         assert first["values"][1] is None
-        second = _parse(NdArrayInt, first).model_dump()
+        second = parse(NdArrayInt, first).model_dump()
         assert first == second
 
 
@@ -824,7 +806,7 @@ class TestSection962NdArrayStr:
 
     def test_spec_ndarray_string_parses(self) -> None:
         """String NdArray example parses with correct dataType and null handling."""
-        nd = _parse(NdArrayStr, self.SPEC_NDARRAY_STR)
+        nd = parse(NdArrayStr, self.SPEC_NDARRAY_STR)
         assert nd.dataType == "string"
         assert nd.shape == [3]
         assert nd.values is not None
@@ -834,11 +816,11 @@ class TestSection962NdArrayStr:
 
     def test_spec_ndarray_string_roundtrip_stable(self) -> None:
         """String NdArray round-trips to identical JSON."""
-        assert _roundtrip_is_stable(NdArrayStr, self.SPEC_NDARRAY_STR)
+        assert roundtrip_is_stable(NdArrayStr, self.SPEC_NDARRAY_STR)
 
     def test_spec_ndarray_string_null_preserved(self) -> None:
         """Null element in string NdArray survives round-trip as null."""
-        result = _roundtrip(NdArrayStr, self.SPEC_NDARRAY_STR)
+        result = roundtrip(NdArrayStr, self.SPEC_NDARRAY_STR)
         assert result["values"][1] is None
 
 
@@ -868,7 +850,7 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_parses(self) -> None:
         """TiledNdArrayFloat parses with correct type, shape and axisNames."""
-        nd = _parse(TiledNdArrayFloat, self.SPEC_TILED)
+        nd = parse(TiledNdArrayFloat, self.SPEC_TILED)
         assert nd.type == "TiledNdArray"
         assert nd.dataType == "float"
         assert nd.shape == [2, 5, 10]
@@ -877,7 +859,7 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_url_templates_preserved(self) -> None:
         """TiledNdArray urlTemplate values survive round-trip unchanged."""
-        result = _roundtrip(TiledNdArrayFloat, self.SPEC_TILED)
+        result = roundtrip(TiledNdArrayFloat, self.SPEC_TILED)
         assert result["tileSets"][0]["urlTemplate"] == (
             "https://example.com/tiles/{t}-{y}-{x}.covjson"
         )
@@ -885,4 +867,4 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_roundtrip_stable(self) -> None:
         """TiledNdArrayFloat round-trips to identical JSON."""
-        assert _roundtrip_is_stable(TiledNdArrayFloat, self.SPEC_TILED)
+        assert roundtrip_is_stable(TiledNdArrayFloat, self.SPEC_TILED)

@@ -32,34 +32,12 @@ documented in the test-class docstring.
 
 from __future__ import annotations
 
-import json
-from typing import Any, TypeVar
+from typing import Any
 
 import pytest
+from conftest import parse, roundtrip, roundtrip_is_stable
 from covjson_pydantic.coverage import Coverage, CoverageCollection
 from covjson_pydantic.domain import CompactAxis, Domain, ValuesAxis
-from pydantic import BaseModel
-
-_M = TypeVar("_M", bound=BaseModel)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse(cls: type[_M], data: dict[str, Any]) -> _M:
-    return cls.model_validate_json(json.dumps(data), strict=True)
-
-
-def _roundtrip(cls: type[BaseModel], data: dict[str, Any]) -> dict[str, Any]:
-    assert isinstance(obj := json.loads(_parse(cls, data).model_dump_json()), dict)
-    return obj
-
-
-def _roundtrip_is_stable(cls: type[BaseModel], data: dict[str, Any]) -> bool:
-    first = _roundtrip(cls, data)
-    second = _roundtrip(cls, first)
-    return first == second
 
 
 class TestPlaygroundGrid:
@@ -120,13 +98,13 @@ class TestPlaygroundGrid:
 
     def test_parses(self) -> None:
         """Playground grid.covjson parses as Coverage with Grid domainType."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.domain.domainType is not None
         assert cov.domain.domainType.value == "Grid"
 
     def test_icec_unit_symbol(self) -> None:
         """ICEC parameter unit symbol is UCUM '1' (dimensionless ratio)."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.parameters is not None
         param = cov.parameters["ICEC"]
         assert param.unit is not None
@@ -136,12 +114,12 @@ class TestPlaygroundGrid:
 
     def test_null_range_value_preserved(self) -> None:
         """Null value in ICEC range survives round-trip serialisation."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         assert result["ranges"]["ICEC"]["values"][5] is None
 
     def test_roundtrip_stable(self) -> None:
         """Playground grid.covjson Coverage round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
 
 class TestPlaygroundGridCategorical:
@@ -214,7 +192,7 @@ class TestPlaygroundGridCategorical:
 
     def test_parses(self) -> None:
         """Playground grid-categorical.covjson parses with two categories."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.parameters is not None
         param = cov.parameters["LC"]
         assert param.observedProperty.categories is not None
@@ -222,7 +200,7 @@ class TestPlaygroundGridCategorical:
 
     def test_category_encoding(self) -> None:
         """LC categoryEncoding maps category URIs to integers."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.parameters is not None
         enc = cov.parameters["LC"].categoryEncoding
         assert enc is not None
@@ -231,12 +209,12 @@ class TestPlaygroundGridCategorical:
 
     def test_null_range_value_preserved(self) -> None:
         """Null value (index 2) in LC integer range survives round-trip."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         assert result["ranges"]["LC"]["values"][2] is None
 
     def test_roundtrip_stable(self) -> None:
         """Playground grid-categorical.covjson Coverage round-trips stably."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
 
 class TestPlaygroundGridDomainBng:
@@ -262,7 +240,7 @@ class TestPlaygroundGridDomainBng:
 
     def test_parses(self) -> None:
         """Playground BNG domain parses as Domain with CompactAxis x and y."""
-        domain = _parse(Domain, self.EXAMPLE)
+        domain = parse(Domain, self.EXAMPLE)
         assert domain.domainType is not None
         assert domain.domainType.value == "Grid"
         assert isinstance(domain.axes.x, CompactAxis)
@@ -270,7 +248,7 @@ class TestPlaygroundGridDomainBng:
 
     def test_compact_axis_values(self) -> None:
         """BNG x/y CompactAxis start, stop and num fields are preserved."""
-        domain = _parse(Domain, self.EXAMPLE)
+        domain = parse(Domain, self.EXAMPLE)
         assert isinstance(domain.axes.x, CompactAxis)
         assert domain.axes.x.start == pytest.approx(185106)
         assert domain.axes.x.stop == pytest.approx(657784)
@@ -278,7 +256,7 @@ class TestPlaygroundGridDomainBng:
 
     def test_projected_crs_epsg27700(self) -> None:
         """BNG referencing carries ProjectedCRS with EPSG:27700 URI."""
-        domain = _parse(Domain, self.EXAMPLE)
+        domain = parse(Domain, self.EXAMPLE)
         assert domain.referencing is not None
         system = domain.referencing[0].system
         assert system.type == "ProjectedCRS"
@@ -286,7 +264,7 @@ class TestPlaygroundGridDomainBng:
 
     def test_roundtrip_stable(self) -> None:
         """Playground BNG domain round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Domain, self.EXAMPLE)
+        assert roundtrip_is_stable(Domain, self.EXAMPLE)
 
 
 class TestPlaygroundGridDomain:
@@ -317,7 +295,7 @@ class TestPlaygroundGridDomain:
 
     def test_parses(self) -> None:
         """Playground grid-domain.covjson parses as Grid domain with CompactAxes."""
-        domain = _parse(Domain, self.EXAMPLE)
+        domain = parse(Domain, self.EXAMPLE)
         assert domain.domainType is not None
         assert domain.domainType.value == "Grid"
         assert isinstance(domain.axes.x, CompactAxis)
@@ -326,7 +304,7 @@ class TestPlaygroundGridDomain:
 
     def test_compact_axis_values(self) -> None:
         """Grid-domain CompactAxis x and y carry correct start, stop and num."""
-        domain = _parse(Domain, self.EXAMPLE)
+        domain = parse(Domain, self.EXAMPLE)
         assert isinstance(domain.axes.x, CompactAxis)
         assert domain.axes.x.start == pytest.approx(-10)
         assert domain.axes.x.stop == pytest.approx(0)
@@ -336,7 +314,7 @@ class TestPlaygroundGridDomain:
 
     def test_roundtrip_stable(self) -> None:
         """Playground grid-domain.covjson Domain round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Domain, self.EXAMPLE)
+        assert roundtrip_is_stable(Domain, self.EXAMPLE)
 
 
 class TestPlaygroundPoint:
@@ -425,14 +403,14 @@ class TestPlaygroundPoint:
 
     def test_parses(self) -> None:
         """Playground point.covjson parses as Coverage with Point domainType."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.domain.domainType is not None
         assert cov.domain.domainType.value == "Point"
         assert cov.parameters is not None
 
     def test_qc_category_encoding(self) -> None:
         """QC parameter categoryEncoding maps Argo flag URIs to integers."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.parameters is not None
         enc = cov.parameters["QC"].categoryEncoding
         assert enc is not None
@@ -442,13 +420,13 @@ class TestPlaygroundPoint:
 
     def test_scalar_ranges(self) -> None:
         """Scalar NdArrays (no axisNames/shape) parse and serialise cleanly."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         assert result["ranges"]["POTM"]["values"] == [pytest.approx(23.8)]
         assert result["ranges"]["QC"]["values"] == [1]
 
     def test_roundtrip_stable(self) -> None:
         """Playground point.covjson Coverage round-trips to identical JSON."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
 
 class TestPlaygroundPointSeries:
@@ -543,19 +521,19 @@ class TestPlaygroundPointSeries:
 
     def test_parses(self) -> None:
         """Playground pointseries.covjson parses as Coverage with PointSeries domain."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.domain.domainType is not None
         assert cov.domain.domainType.value == "PointSeries"
 
     def test_t_axis_length(self) -> None:
         """PointSeries t axis has six date values."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert isinstance(cov.domain.axes.t, ValuesAxis)
         assert len(cov.domain.axes.t.values) == 6
 
     def test_psal_string_symbol_unit(self) -> None:
         """PSAL parameter unit with plain string symbol (not object) parses."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.parameters is not None
         psal = cov.parameters["PSAL"]
         assert psal.unit is not None
@@ -563,7 +541,7 @@ class TestPlaygroundPointSeries:
 
     def test_roundtrip_stable(self) -> None:
         """Playground pointseries.covjson Coverage round-trips stably."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
 
 class TestPlaygroundProfile:
@@ -729,19 +707,19 @@ class TestPlaygroundProfile:
 
     def test_parses(self) -> None:
         """Playground profile.covjson parses as Coverage with VerticalProfile domain."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.domain.domainType is not None
         assert cov.domain.domainType.value == "VerticalProfile"
 
     def test_z_axis_length(self) -> None:
         """VerticalProfile z axis carries 21 pressure-level values."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert isinstance(cov.domain.axes.z, ValuesAxis)
         assert len(cov.domain.axes.z.values) == 21
 
     def test_vertical_crs_preserved(self) -> None:
         """VerticalCRS with cs/csAxes content survives round-trip via extra fields."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         vert_system = next(
             ref["system"]
             for ref in result["domain"]["referencing"]
@@ -752,13 +730,13 @@ class TestPlaygroundProfile:
 
     def test_psal_z_shape(self) -> None:
         """PSAL NdArray has z-axis shape [21] after round-trip."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         assert result["ranges"]["PSAL"]["shape"] == [21]
         assert result["ranges"]["PSAL"]["axisNames"] == ["z"]
 
     def test_roundtrip_stable(self) -> None:
         """Playground profile.covjson Coverage round-trips stably."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
 
 class TestPlaygroundTrajectory:
@@ -824,13 +802,13 @@ class TestPlaygroundTrajectory:
 
     def test_parses(self) -> None:
         """Playground trajectory.covjson parses with Trajectory domainType."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.domain.domainType is not None
         assert cov.domain.domainType.value == "Trajectory"
 
     def test_composite_axis_four_coordinates(self) -> None:
         """Trajectory composite axis carries four coordinates (t, x, y, z)."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         composite = cov.domain.axes.composite
         assert composite is not None
         assert composite.coordinates == ["t", "x", "y", "z"]
@@ -838,7 +816,7 @@ class TestPlaygroundTrajectory:
 
     def test_composite_axis_values_preserved(self) -> None:
         """Trajectory composite axis tuple values survive round-trip."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         composite = result["domain"]["axes"]["composite"]
         assert composite["dataType"] == "tuple"
         assert composite["coordinates"] == ["t", "x", "y", "z"]
@@ -847,7 +825,7 @@ class TestPlaygroundTrajectory:
 
     def test_roundtrip_stable(self) -> None:
         """Playground trajectory.covjson Coverage round-trips stably."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
 
 
 class TestPlaygroundPointCollection:
@@ -955,26 +933,26 @@ class TestPlaygroundPointCollection:
 
     def test_parses(self) -> None:
         """Playground point-collection.covjson parses as CoverageCollection."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         assert col.type == "CoverageCollection"
         assert col.domainType is not None
         assert col.domainType.value == "Point"
 
     def test_two_coverages(self) -> None:
         """CoverageCollection contains exactly two Coverage objects."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         assert len(col.coverages) == 2
 
     def test_shared_parameters(self) -> None:
         """Shared POTM and QC parameters are present at the collection level."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         assert col.parameters is not None
         assert "POTM" in col.parameters
         assert "QC" in col.parameters
 
     def test_coverage_ranges_distinct(self) -> None:
         """Each Coverage in the collection carries its own independent ranges."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         potm_0 = col.coverages[0].ranges["POTM"]
         potm_1 = col.coverages[1].ranges["POTM"]
         assert not isinstance(potm_0, str)
@@ -984,7 +962,7 @@ class TestPlaygroundPointCollection:
 
     def test_roundtrip_stable(self) -> None:
         """Playground point-collection.covjson CoverageCollection round-trips stably."""
-        assert _roundtrip_is_stable(CoverageCollection, self.EXAMPLE)
+        assert roundtrip_is_stable(CoverageCollection, self.EXAMPLE)
 
 
 class TestPlaygroundProfileCollection:
@@ -1083,19 +1061,19 @@ class TestPlaygroundProfileCollection:
 
     def test_parses(self) -> None:
         """Playground profile-collection.covjson parses as CoverageCollection."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         assert col.type == "CoverageCollection"
         assert col.domainType is not None
         assert col.domainType.value == "VerticalProfile"
 
     def test_two_profiles(self) -> None:
         """Profile collection contains exactly two Coverage objects."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         assert len(col.coverages) == 2
 
     def test_vertical_crs_in_shared_referencing(self) -> None:
         """Shared referencing includes VerticalCRS; cs/csAxes content preserved."""
-        result = _roundtrip(CoverageCollection, self.EXAMPLE)
+        result = roundtrip(CoverageCollection, self.EXAMPLE)
         vert_system = next(
             ref["system"]
             for ref in result["referencing"]
@@ -1106,7 +1084,7 @@ class TestPlaygroundProfileCollection:
 
     def test_profile_z_axes_distinct(self) -> None:
         """Each profile's z axis carries its own depth levels."""
-        col = _parse(CoverageCollection, self.EXAMPLE)
+        col = parse(CoverageCollection, self.EXAMPLE)
         z0 = col.coverages[0].domain.axes.z
         z1 = col.coverages[1].domain.axes.z
         assert isinstance(z0, ValuesAxis)
@@ -1116,7 +1094,7 @@ class TestPlaygroundProfileCollection:
 
     def test_roundtrip_stable(self) -> None:
         """Playground profile-collection.covjson round-trips stably."""
-        assert _roundtrip_is_stable(CoverageCollection, self.EXAMPLE)
+        assert roundtrip_is_stable(CoverageCollection, self.EXAMPLE)
 
 
 class TestPlaygroundPolygonSeries:
@@ -1215,13 +1193,13 @@ class TestPlaygroundPolygonSeries:
 
     def test_parses(self) -> None:
         """Playground polygonseries.covjson parses with PolygonSeries domainType."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert cov.domain.domainType is not None
         assert cov.domain.domainType.value == "PolygonSeries"
 
     def test_polygon_composite_axis(self) -> None:
         """PolygonSeries composite axis has dataType 'polygon' and one ring set."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         composite = cov.domain.axes.composite
         assert composite is not None
         assert composite.dataType == "polygon"
@@ -1229,7 +1207,7 @@ class TestPlaygroundPolygonSeries:
 
     def test_polygon_coordinates_preserved(self) -> None:
         """Polygon ring coordinates survive round-trip unchanged."""
-        result = _roundtrip(Coverage, self.EXAMPLE)
+        result = roundtrip(Coverage, self.EXAMPLE)
         ring = result["domain"]["axes"]["composite"]["values"][0][0]
         assert ring[0] == [9.92, 54.98]
         assert ring[-1] == [9.92, 54.98]
@@ -1237,10 +1215,10 @@ class TestPlaygroundPolygonSeries:
 
     def test_t_axis_length(self) -> None:
         """PolygonSeries t axis has three time steps."""
-        cov = _parse(Coverage, self.EXAMPLE)
+        cov = parse(Coverage, self.EXAMPLE)
         assert isinstance(cov.domain.axes.t, ValuesAxis)
         assert len(cov.domain.axes.t.values) == 3
 
     def test_roundtrip_stable(self) -> None:
         """Playground polygonseries.covjson Coverage round-trips stably."""
-        assert _roundtrip_is_stable(Coverage, self.EXAMPLE)
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
