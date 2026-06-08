@@ -8,6 +8,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import rasterio
+from conftest import assert_schema_valid
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.unit import Symbol, Unit
 
@@ -45,9 +46,10 @@ class TestNumpyDtypeToNdarray:
         assert isinstance(nd, NdArrayFloat)
         assert nd.shape == [2, 2]
         assert nd.values == [1.0, 2.0, 3.0, 4.0]
+        assert_schema_valid(nd, "ndArray")
 
     def test_float_masked_values_become_nan(self) -> None:
-        """Masked float entries become NaN in the output values."""
+        """Masked float entries become NaN in model_dump() but null in JSON output."""
         import math
 
         arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.array(
@@ -59,6 +61,9 @@ class TestNumpyDtypeToNdarray:
         assert nd.values[0] == 1.0
         assert math.isnan(nd.values[1])  # type: ignore[arg-type]
         assert nd.values[2] == 3.0
+        # model_dump_json() serialises the masked NaN as null, which is valid
+        # per the schema ("type": ["number", "null"]).
+        assert_schema_valid(nd, "ndArray")
 
     def test_integer_unmasked(self) -> None:
         """Integer array with no mask produces NdArrayInt with int values."""
@@ -69,6 +74,7 @@ class TestNumpyDtypeToNdarray:
         assert isinstance(nd, NdArrayInt)
         assert nd.shape == [3]
         assert nd.values == [10, 20, 30]
+        assert_schema_valid(nd, "ndArray")
 
     def test_integer_masked_values_become_none(self) -> None:
         """Masked integer entries become None in the output values."""
@@ -79,6 +85,7 @@ class TestNumpyDtypeToNdarray:
         assert isinstance(nd, NdArrayInt)
         assert nd.values is not None
         assert nd.values == [10, None, 30]
+        assert_schema_valid(nd, "ndArray")
 
     @pytest.mark.parametrize(
         "dtype",
@@ -93,6 +100,7 @@ class TestNumpyDtypeToNdarray:
         nd = numpy_dtype_to_ndarray(arr, dtype, ["y", "x"])
         assert nd.shape == [4, 8]
         assert nd.axisNames == ["y", "x"]
+        assert_schema_valid(nd, "ndArray")
 
     def test_string_dtype_produces_ndarray_str(self) -> None:
         """Object dtype produces NdArrayStr."""
@@ -103,6 +111,7 @@ class TestNumpyDtypeToNdarray:
         assert isinstance(nd, NdArrayStr)
         assert nd.values is not None
         assert nd.values == ["a", None, "c"]
+        assert_schema_valid(nd, "ndArray")
 
 
 class TestNumpyToCovjsonDtype:
