@@ -15,8 +15,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 - Unit tests cover all domain types (Grid, Point, PointSeries, Polygon, Trajectory)
 - Performance is acceptable for typical raster sizes (< 2s for a 256x256 tile)
 
----
-
 ## Stories
 
 ### Story 1: CovJSON Model Layer Setup
@@ -28,22 +26,21 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 > **NOTE**: See [06-existing-libraries-analysis.md](06-existing-libraries-analysis.md) for full analysis of this library.
 
 **Tasks**:
-- [ ] Add `covjson-pydantic>=0.7.0` as a project dependency
-- [ ] Create `titiler_covjson/helpers.py` with convenience factories:
+
+- [x] Add `covjson-pydantic>=0.7.0` as a project dependency
+- [x] Create `titiler_covjson/helpers.py` with convenience factories:
   - `create_spatial_2d_ref(crs_uri)` -> `ReferenceSystemConnectionObject`
   - `create_temporal_ref()` -> `ReferenceSystemConnectionObject`
   - `crs_to_ogc_uri(rasterio.CRS)` -> OGC CRS URI string
   - `create_unit(unit_str)` -> `Unit` (UCUM mapping)
   - `numpy_dtype_to_ndarray(dtype, ...)` -> `NdArrayFloat` / `NdArrayInt` / `NdArrayStr`
-- [ ] Evaluate gap: Polygon domain type not supported in covjson-pydantic (see gap analysis in doc 06)
-- [ ] Write unit tests validating helper output and serialization against CovJSON spec examples
-- [ ] Vendor `covjson-validator` JSON schemas for use in integration tests (Story 13)
+- [x] Evaluate gap: Polygon domain type not supported in covjson-pydantic (see gap analysis in doc 06)
+- [x] Write unit tests validating helper output and serialization against CovJSON spec examples
+- [x] Vendor `covjson-validator` JSON schemas for use in integration tests (Story 13)
 
 **Deliverables**: `titiler_covjson/helpers.py`, `tests/test_helpers.py`, updated `pyproject.toml`
 
 **Estimated effort**: XS (0.5-1 day)
-
----
 
 ### Story 2: CoverageInput Intermediate Representation
 
@@ -52,17 +49,16 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Create the `CoverageInput` dataclass that decouples TiTiler/rio-tiler data from the CovJSON conversion.
 
 **Tasks**:
-- [ ] Create `titiler_covjson/input.py` with CoverageInput and BandInfo dataclasses
-- [ ] Implement `imagedata_to_coverage_input()` converter from rio-tiler ImageData
-- [ ] Handle nodata/mask propagation from ImageData to masked arrays
-- [ ] Handle CRS extraction and band metadata extraction from reader info
-- [ ] Write unit tests
+
+- [x] Create `titiler_covjson/input.py` with CoverageInput and BandInfo dataclasses
+- [x] Implement `imagedata_to_coverage_input()` converter from rio-tiler ImageData
+- [x] Handle nodata/mask propagation from ImageData to masked arrays
+- [x] Handle CRS extraction and band metadata extraction from reader info
+- [x] Write unit tests
 
 **Deliverables**: `titiler_covjson/input.py`, `tests/test_input.py`
 
 **Estimated effort**: S (1-2 days)
-
----
 
 ### Story 3: RasterCovJSONModeler - Core Conversion Logic
 
@@ -71,6 +67,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the modeler that converts CoverageInput to CovJSON Coverage objects.
 
 **Tasks**:
+
 - [ ] Create `titiler_covjson/modeler.py` with RasterCovJSONModeler class
 - [ ] Implement domain type detection (`_get_domain_type`)
 - [ ] Implement axis creation for all domain types (`_create_axes`)
@@ -89,8 +86,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: M (3-5 days)
 
----
-
 ### Story 4: Point Query Endpoint
 
 **Priority**: P1
@@ -98,6 +93,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/point` endpoint for pixel-level value extraction.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/point`
 - [ ] Accept parameters: url, lon, lat, bands, band_names, nodata
 - [ ] Use rio-tiler Reader.point() for value extraction
@@ -109,8 +105,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: S (1-2 days)
 
----
-
 ### Story 5: Bounding Box Query Endpoint
 
 **Priority**: P1
@@ -118,6 +112,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/bbox` endpoint for area-based coverage retrieval.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/bbox`
 - [ ] Accept parameters: url, bbox, bands, width, height, max_size, format, aggregation, nodata
 - [ ] For `format=full`: use Reader.part() for raster extract -> Grid domain
@@ -129,8 +124,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: M (2-3 days)
 
----
-
 ### Story 6: Transect / Line Profile Endpoint
 
 **Priority**: P1
@@ -138,6 +131,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/transect` endpoint for line-based sampling.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/transect`
 - [ ] Accept parameters: url, coordinates (pipe-separated), bands, resolution, buffer, nodata
 - [ ] Parse coordinate string into Shapely LineString
@@ -150,8 +144,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: M (2-3 days)
 
----
-
 ### Story 7: CovJSON Tile Endpoint
 
 **Priority**: P1
@@ -159,6 +151,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/tiles/{z}/{x}/{y}` endpoint serving tiles as CovJSON.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/tiles/{z}/{x}/{y}`
 - [ ] Accept parameters: url, bands, tile_size, nodata
 - [ ] Use Reader.tile(x, y, z) for tile data access
@@ -170,8 +163,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: S (1-2 days)
 
----
-
 ### Story 8: Coverage Info / Metadata Endpoint
 
 **Priority**: P2
@@ -179,6 +170,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/info` endpoint returning metadata without data values.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/info`
 - [ ] Accept parameters: url, collection
 - [ ] Use Reader.info() for metadata extraction
@@ -190,8 +182,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: S (1 day)
 
----
-
 ### Story 9: Time Series Endpoint (STAC Collection)
 
 **Priority**: P2
@@ -199,6 +189,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/timeseries` endpoint for temporal queries across STAC collection items.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/timeseries`
 - [ ] Accept parameters: collection, lon, lat (or bbox), bands, datetime, aggregation, limit
 - [ ] Query STAC catalog to resolve items within datetime range
@@ -212,8 +203,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: L (5-8 days)
 
----
-
 ### Story 10: Overview / Downsampled Grid Endpoint
 
 **Priority**: P2
@@ -221,6 +210,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Implement the `/covjson/overview` endpoint for low-resolution overview data.
 
 **Tasks**:
+
 - [ ] Create FastAPI route `GET /covjson/overview`
 - [ ] Accept parameters: url, bbox, bands, width, height
 - [ ] Use COG overview levels for fast access at reduced resolution
@@ -231,8 +221,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: S (1-2 days)
 
----
-
 ### Story 11: TiTiler Router Integration
 
 **Priority**: P1
@@ -240,6 +228,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Package all CovJSON endpoints as a TiTiler extension router.
 
 **Tasks**:
+
 - [ ] Create `titiler_covjson/router.py` as a TiTiler `FactoryExtension` or standalone `APIRouter`
 - [ ] Register custom response class for `application/prs.coverage+json`
 - [ ] Add OpenAPI documentation (tags, descriptions, examples)
@@ -251,8 +240,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: M (2-3 days)
 
----
-
 ### Story 12: TiledNdArray Support for Large Coverages
 
 **Priority**: P3
@@ -260,6 +247,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Support `TiledNdArray` range type for large coverages where sending the full values array is impractical.
 
 **Tasks**:
+
 - [ ] Implement TileSet URL template generation
 - [ ] When bbox coverage exceeds a threshold (e.g., > 1024x1024), use TiledNdArray instead of NdArray
 - [ ] URL template points to CovJSON tile endpoint: `/covjson/tiles/{z}/{x}/{y}?url=...`
@@ -270,8 +258,6 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: M (3-4 days)
 
----
-
 ### Story 13: Documentation & Validation
 
 **Priority**: P2
@@ -279,6 +265,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 **Description**: Create user-facing documentation and add CovJSON schema validation using [`covjson-validator`](https://github.com/covjson/covjson-validator) schemas.
 
 **Tasks**:
+
 - [ ] Write user documentation (endpoint usage, examples, supported formats)
 - [ ] Vendor `covjson-validator` JSON Schemas into test fixtures for offline validation
 - [ ] Create integration tests that validate API responses against the official CovJSON JSON Schema (`covjson.org/schema/dev/coveragejson.json`)
@@ -291,11 +278,9 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: M (2-3 days)
 
----
-
 ## Dependency Graph
 
-```
+```plain
 Story 1 (covjson-pydantic + helpers) ──┐
                                         ├──> Story 3 (Modeler) ──┐
 Story 2 (CoverageInput)             ──┘                         │
@@ -315,32 +300,26 @@ Story 2 (CoverageInput)             ──┘                         │
                                                         Story 13 (Docs + covjson-validator)
 ```
 
----
-
 ## Suggested Sprint Plan
 
 | Sprint | Stories | Focus |
-|--------|---------|-------|
+| -------- | --------- | ------- |
 | Sprint 1 | 1, 2, 3 | Foundation: models, input, modeler |
 | Sprint 2 | 4, 5, 7, 11 | Core endpoints: point, bbox, tile + router |
 | Sprint 3 | 6, 8, 10 | Extended endpoints: transect, info, overview |
 | Sprint 4 | 9, 12, 13 | Advanced: time series, tiled ranges, docs |
 
----
-
 ## Technical Risks & Mitigations
 
 | Risk | Impact | Mitigation |
-|---|---|---|
+| --- | --- | --- |
 | Large CovJSON payloads for high-res rasters | Performance, memory | Use max_size limits; implement TiledNdArray (Story 12); gzip compression |
 | CovJSON spec compliance edge cases | Interop with CovJSON clients | Use `covjson-pydantic` built-in validators + `covjson-validator` schemas in tests |
-| `covjson-pydantic` missing Polygon domain type | Cannot represent aggregated bbox results as Polygon | Use PolygonSeries without `t` axis, or contribute upstream (issue #25) |
+| `covjson-pydantic` missing Polygon domain type | Cannot represent aggregated bbox results as Polygon | Wait for upstream [PR #30](https://github.com/KNMI/covjson-pydantic/pull/30) (approved 2026-06-11); until released, the modeler raises `NotImplementedError` for polygon-without-time. NOTE: "PolygonSeries without `t` axis" is NOT viable -- both the CovJSON spec and `covjson-pydantic` require a `t` axis on PolygonSeries (verified: `ValidationError`) |
 | `covjson-pydantic` pre-1.0 API stability | Breaking changes on minor version bump | Pin to `>=0.7.0,<1.0`; monitor releases |
 | Time series across many STAC items | Slow response times | Limit parameter; async fetching; COG overview usage |
 | CRS handling complexity | Incorrect coordinates | Default to WGS84; validate with rasterio; test with projected CRS |
 | numpy dtype serialization (NaN, inf) | Invalid JSON | Replace NaN/inf with null; use masked arrays |
-
----
 
 ## Resources & References
 

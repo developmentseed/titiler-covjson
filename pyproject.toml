@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "titiler.core>=0.18.0,<1.0",
+    "rio-tiler>=7.0,<8.0",
     "covjson-pydantic>=0.7.0,<1.0",
     "shapely>=2.0",
     "numpy>=2.2.6",
@@ -98,5 +99,5 @@ module = ["ucumvert", "ucumvert.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["conftest", "test_helpers", "test_playground_roundtrip", "test_spec_roundtrip"]
+module = ["conftest", "test_helpers", "test_input", "test_playground_roundtrip", "test_spec_roundtrip"]
 disallow_untyped_calls = false
