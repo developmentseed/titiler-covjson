@@ -415,9 +415,11 @@ def imagedata_to_coverage_input(
         msg = "ImageData has no CRS; pass an explicit `crs` argument"
         raise ValueError(msg)
 
+    left, bottom, right, top = img.bounds
+
     return CoverageInput(
         data=img.array,
-        bounds=tuple(img.bounds),
+        bounds=(left, bottom, right, top),
         crs=resolved_crs,
         geometry=geometry,
         bands=_resolve_bands(img, bands, band_names, band_descriptions, band_units),
