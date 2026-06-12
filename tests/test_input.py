@@ -102,6 +102,12 @@ class TestCoverageInput:
         with pytest.raises(ValueError, match="must have shape"):
             masked_input(np.ma.MaskedArray(np.zeros(shape)))
 
+    @pytest.mark.parametrize("shape", [(0, 2), (0, 2, 2)], ids=("2D", "3D"))
+    def test_zero_bands_raises(self, shape: tuple[int, ...]) -> None:
+        """2-D or 3-D data are rejected when there are no (empty) bands."""
+        with pytest.raises(ValueError, match="must have shape"):
+            masked_input(np.ma.MaskedArray(np.zeros(shape)))
+
     def test_band_count_mismatch_raises(self) -> None:
         """A non-empty bands tuple must match data.shape[0]."""
         with pytest.raises(ValueError, match="does not match"):

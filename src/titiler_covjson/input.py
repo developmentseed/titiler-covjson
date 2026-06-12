@@ -146,10 +146,11 @@ class CoverageInput:
             ValueError: If ``data`` is not 2-D or 3-D, or if ``bands`` is
                 non-empty and its length does not match ``data.shape[0]``.
         """
-        if self.data.ndim not in (2, 3):
+        if self.data.ndim not in {2, 3} or self.data.shape[0] == 0:
             msg = (
                 "CoverageInput data must have shape (bands, height, width) or "
-                f"(bands, n); got {self.data.ndim} dimension(s)"
+                f"(bands, n), with at least 1 band; got {self.data.ndim} dimension(s) "
+                f"with {self.data.shape[0]} band(s)"
             )
             raise ValueError(msg)
         if self.bands and len(self.bands) != self.data.shape[0]:
