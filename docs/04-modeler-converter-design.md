@@ -284,6 +284,12 @@ def transect_to_coverage_input(url: str, line: LineString, resolution: float, ..
 
 ### 7.1 Motivation
 
+This refactor addresses **domain shape** (Grid vs Point vs Trajectory vs
+...); it is orthogonal to the single-array, data-cube constraint in §3.1.
+The two can be decided independently: per-domain variants do not change band
+semantics, and moving to a `Sequence[BandData]` later would not affect the
+variant split.
+
 The single `CoverageInput` class (Section 3) works well for the first endpoints but
 has structural problems that grow with each domain type:
 
