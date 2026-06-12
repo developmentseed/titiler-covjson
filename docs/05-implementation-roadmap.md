@@ -117,6 +117,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 - [ ] Accept parameters: url, bbox, bands, width, height, max_size, format, aggregation, nodata
 - [ ] For `format=full`: use Reader.part() for raster extract -> Grid domain
 - [ ] For `format=aggregated`: compute stats over bbox -> Polygon domain
+  (blocked on the upstream Polygon domain type -- tracked in #7)
 - [ ] Enforce max_size limits
 - [ ] Write integration tests
 
@@ -195,7 +196,8 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 - [ ] Query STAC catalog to resolve items within datetime range
 - [ ] For each item, extract point or aggregated values using Reader
 - [ ] Build temporal axis from item datetimes
-- [ ] Return Coverage with PointSeries or PolygonSeries domain
+- [ ] Return Coverage with PointSeries or PolygonSeries domain (PolygonSeries
+  depends on the upstream Polygon domain type -- tracked in #7)
 - [ ] Handle pagination/limit for large collections
 - [ ] Write integration tests
 
@@ -315,7 +317,7 @@ Story 2 (CoverageInput)             ──┘                         │
 | --- | --- | --- |
 | Large CovJSON payloads for high-res rasters | Performance, memory | Use max_size limits; implement TiledNdArray (Story 12); gzip compression |
 | CovJSON spec compliance edge cases | Interop with CovJSON clients | Use `covjson-pydantic` built-in validators + `covjson-validator` schemas in tests |
-| `covjson-pydantic` missing Polygon domain type | Cannot represent aggregated bbox results as Polygon | Wait for upstream [PR #30](https://github.com/KNMI/covjson-pydantic/pull/30) (approved 2026-06-11); until released, the modeler raises `NotImplementedError` for polygon-without-time. NOTE: "PolygonSeries without `t` axis" is NOT viable -- both the CovJSON spec and `covjson-pydantic` require a `t` axis on PolygonSeries (verified: `ValidationError`) |
+| `covjson-pydantic` missing Polygon domain type | Cannot represent aggregated bbox results as Polygon | Wait for upstream [PR #30](https://github.com/KNMI/covjson-pydantic/pull/30) (approved 2026-06-11); until released, the modeler raises `NotImplementedError` for polygon-without-time. NOTE: "PolygonSeries without `t` axis" is NOT viable -- both the CovJSON spec and `covjson-pydantic` require a `t` axis on PolygonSeries (verified: `ValidationError`). Tracked in #7 |
 | `covjson-pydantic` pre-1.0 API stability | Breaking changes on minor version bump | Pin to `>=0.7.0,<1.0`; monitor releases |
 | Time series across many STAC items | Slow response times | Limit parameter; async fetching; COG overview usage |
 | CRS handling complexity | Incorrect coordinates | Default to WGS84; validate with rasterio; test with projected CRS |
