@@ -318,13 +318,18 @@ class TestBandInfoFromReaderInfo:
 
         assert band_info_from_reader_info(info)[0].unit == "K"
 
-    def test_unit_key_precedence(self) -> None:
-        """ "units" wins over the other unit tag keys when both are present."""
+    @pytest.mark.parametrize(
+        ("winner", "loser"),
+        [("units", "unit"), ("unit", "UNITTYPE"), ("UNITTYPE", "GRIB_UNIT")],
+    )
+    def test_unit_key_precedence(self, winner: str, loser: str) -> None:
+        """Each unit tag key wins over the next, locking in the full ordering.
+
+        Sweeping the adjacent pairs of ``_UNIT_TAG_KEYS`` is cheap insurance
+        against an accidental reorder of the precedence list.
+        """
         info = self.make_info(
-            band_metadata=[
-                ("b1", {"UNITTYPE": "ft", "units": "m"}),
-                ("b2", {}),
-            ]
+            band_metadata=[("b1", {loser: "ft", winner: "m"}), ("b2", {})]
         )
 
         assert band_info_from_reader_info(info)[0].unit == "m"
