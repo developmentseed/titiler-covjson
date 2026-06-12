@@ -128,6 +128,42 @@ class TestCoverageInput:
 
         assert [band.name for band in cov.bands] == ["b1", "b2"]
 
+    def test_2d_timestamps_match_passes(self) -> None:
+        """2-D data with one timestamp per sample is accepted."""
+        cov = CoverageInput(
+            data=np.ma.MaskedArray(np.zeros((1, 3))),
+            bounds=BOUNDS,
+            crs=CRS,
+            timestamps=("t0", "t1", "t2"),
+        )
+
+        assert cov.timestamps == ("t0", "t1", "t2")
+
+    def test_2d_timestamps_mismatch_raises(self) -> None:
+        """2-D data with the wrong number of timestamps is rejected early."""
+        with pytest.raises(ValueError, match="Number of timestamps"):
+            CoverageInput(
+                data=np.ma.MaskedArray(np.zeros((1, 3))),
+                bounds=BOUNDS,
+                crs=CRS,
+                timestamps=("t0", "t1"),
+            )
+
+    def test_3d_timestamps_not_checked(self) -> None:
+        """For 3-D data the time axis is domain-dependent, so it is deferred.
+
+        A timestamp count unrelated to any axis length passes ``__post_init__``
+        (the modeler validates 3-D+ timestamp/shape consistency, not this).
+        """
+        cov = CoverageInput(
+            data=np.ma.MaskedArray(np.zeros((1, 2, 2))),
+            bounds=BOUNDS,
+            crs=CRS,
+            timestamps=("t0", "t1", "t2", "t3", "t4"),
+        )
+
+        assert len(cov.timestamps or ()) == 5
+
     def test_frozen(self) -> None:
         """CoverageInput is immutable."""
         cov = masked_input(np.ma.MaskedArray(np.zeros((1, 2, 2))))

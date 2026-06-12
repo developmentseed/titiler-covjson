@@ -132,16 +132,24 @@ class CoverageInput:
     item_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        """Validate array dimensionality and band count.
+        """Validate array dimensionality, band count, and 2-D timestamps.
 
-        Only domain-independent invariants are checked here; consistency
-        between ``geometry``, ``timestamps``, and the array shape depends on
-        the target CovJSON domain type and is validated by the modeler.
+        Mostly domain-independent invariants. The one domain-shaped exception
+        is timestamps against 2-D point/profile data: there the sample axis is
+        unambiguously ``data.shape[-1]``, so a ``len(timestamps)`` mismatch is
+        a construction error worth catching early (the common Point/PointSeries
+        flow). For 3-D and higher data the time axis is domain-dependent, so
+        timestamp/geometry/shape consistency there is left to the modeler (and,
+        eventually, the per-domain input variants -- see
+        ``docs/04-modeler-converter-design.md``, Section 7).
 
         Raises:
-            ValueError: If ``data`` is not 2-D or 3-D, or if ``bands`` is
-                non-empty and its length does not match ``data.shape[0]``.
+            ValueError: If ``data`` is not 2-D or 3-D with at least 1 band; if
+                ``bands`` is non-empty and its length does not match
+                ``data.shape[0]``; or if ``data`` is 2-D and ``len(timestamps)``
+                does not match the sample axis ``data.shape[-1]``.
         """
+
         if self.data.ndim not in {2, 3} or self.data.shape[0] == 0:
             msg = (
                 "CoverageInput data must have shape (bands, height, width) or "
@@ -153,6 +161,16 @@ class CoverageInput:
             msg = (
                 f"Number of bands ({len(self.bands)}) does not match "
                 f"data.shape[0] ({self.data.shape[0]})"
+            )
+            raise ValueError(msg)
+        if (
+            self.timestamps is not None
+            and self.data.ndim == 2
+            and len(self.timestamps) != self.data.shape[-1]
+        ):
+            msg = (
+                f"Number of timestamps ({len(self.timestamps)}) does not match "
+                f"the sample axis data.shape[-1] ({self.data.shape[-1]})"
             )
             raise ValueError(msg)
 
