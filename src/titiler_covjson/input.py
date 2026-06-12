@@ -171,6 +171,16 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
     are probed from the per-band GDAL tags in ``info.band_metadata`` using,
     in order of precedence: ``units``, ``unit``, ``UNITTYPE``, ``GRIB_UNIT``.
 
+    ``BandInfo.dtype`` is per-band, but ``info.dtype`` is a single
+    dataset-level value, so every band here is assigned the same dtype.
+    Sources with genuinely mixed-dtype bands (uncommon, but possible in
+    netCDF) are uniformized to that one dtype -- this loader cannot recover
+    per-band dtypes. That is acceptable for the single-array raster path; it
+    will need revisiting when heterogeneous STAC asset dtypes are combined
+    into one coverage (see ``docs/04-modeler-converter-design.md``, Section
+    3.1). Callers needing true per-band dtypes must build :class:`BandInfo`
+    entries directly rather than going through this helper.
+
     Args:
         info: A rio-tiler ``Info`` model, as returned by ``Reader.info()``.
 

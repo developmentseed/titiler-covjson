@@ -311,6 +311,19 @@ class TestBandInfoFromReaderInfo:
         assert [band.unit for band in bands] == ["mm", ""]
         assert all(band.dtype == "int16" for band in bands)
 
+    def test_dtype_is_uniform_dataset_level(self) -> None:
+        """Every band gets the single dataset-level ``info.dtype``.
+
+        ``info.dtype`` is dataset-level while ``BandInfo.dtype`` is per-band,
+        so this loader cannot deliver heterogeneous per-band dtypes: all bands
+        are uniformized to the one reported dtype. Pinning that documented
+        behavior guards against a future change that silently sources dtype
+        per band from somewhere the reader does not actually populate.
+        """
+        bands = band_info_from_reader_info(self.make_info(dtype="float64"))
+
+        assert {str(band.dtype) for band in bands} == {"float64"}
+
     @pytest.mark.parametrize("key", ["units", "unit", "UNITTYPE", "GRIB_UNIT"])
     def test_unit_key_variants(self, key: str) -> None:
         """Each supported GDAL unit tag key is picked up."""
