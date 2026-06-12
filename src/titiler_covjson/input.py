@@ -233,13 +233,13 @@ def _per_band(
 
     Args:
         label: Argument name used in the error message.
+        n_bands: Number of bands in the image.
         values: Caller-supplied per-band values, or ``None`` to use
             ``default``.
         default: Values to use when ``values`` is ``None``. Also validated:
             a default drawn from image metadata (e.g., ``img.band_names``)
             is not guaranteed to match the band count, since rio-tiler does
             not validate ``band_names`` length at construction.
-        n_bands: Number of bands in the image.
 
     Returns:
         Sequence[str]: Per-band values, one entry per band.
