@@ -89,6 +89,34 @@ Domain-dependent consistency (geometry vs. timestamps vs. array shape) is
 deferred to the modeler -- see Section 7 for the planned evolution that removes
 this split.
 
+### 3.1 Single-array, data-cube constraint
+
+`CoverageInput.data` is a single masked array with a leading band axis:
+bands share one shape, one dtype, and one spatial/temporal footprint. This
+follows the data-cube model and lets endpoint code pass `ImageData.array`
+through as-is while keeping the modeler's range-creation path shape-driven
+rather than per-variable.
+
+It is a deliberate narrowing relative to a per-variable container where each
+band could carry its own shape, dtype, and axis names. Consequences to be
+accepted as constraints for later stories:
+
+- **Story 9 (time series across STAC items)** must align all selected
+  assets onto the same cube. Items contributing different shapes, dtypes,
+  or temporal coverages have to be resampled, padded, or rejected at the
+  endpoint -- they cannot be packed into one `CoverageInput`. Mixed-dtype
+  responses (e.g., `displacement: float32` + `coherence: uint8`) require
+  either an upcast or splitting into multiple coverages.
+- **Story 11 (router integration)** inherits the same shape: one `Coverage`
+  per response covers one cube; heterogeneous variables go into a
+  `CoverageCollection`, one coverage per dtype/shape group.
+
+If either case starts demanding genuinely heterogeneous bands, the natural
+follow-up is to let `CoverageInput` hold a `Sequence[BandData]` (each owning
+its own array and dtype) rather than a single `(bands, ...)` array. Defer
+this until a concrete endpoint requires it; the Section 7 union refactor is
+independent and addresses domain shape, not band heterogeneity.
+
 ## 4. RasterCovJSONModeler
 
 ```python
