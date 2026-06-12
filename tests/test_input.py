@@ -67,7 +67,6 @@ class TestBandInfo:
         assert band.description == ""
         assert band.unit == ""
         assert band.dtype is np.float32
-        assert band.nodata is None
 
     def test_frozen(self) -> None:
         """BandInfo is immutable."""
@@ -224,7 +223,7 @@ class TestImagedataToCoverageInput:
 
     def test_bands_kwarg_applied(self) -> None:
         """An explicit bands sequence is stored as a tuple, entries unchanged."""
-        bands = [BandInfo("a", nodata=0.0), BandInfo("b", unit="m")]
+        bands = [BandInfo("a", description="alpha"), BandInfo("b", unit="m")]
         cov = imagedata_to_coverage_input(make_image(), bands=bands)
 
         assert cov.bands == tuple(bands)
@@ -304,21 +303,13 @@ class TestBandInfoFromReaderInfo:
         return Info(**(defaults | kwargs))
 
     def test_extraction(self) -> None:
-        """Names, descriptions, units, dtype, and nodata are extracted."""
-        info = self.make_info(nodata_type="Nodata", nodata_value=-9999)
-        bands = band_info_from_reader_info(info)
+        """Names, descriptions, units, and dtype are extracted."""
+        bands = band_info_from_reader_info(self.make_info())
 
         assert [band.name for band in bands] == ["b1", "b2"]
         assert [band.description for band in bands] == ["precipitation", ""]
         assert [band.unit for band in bands] == ["mm", ""]
         assert all(band.dtype == "int16" for band in bands)
-        assert all(band.nodata == -9999.0 for band in bands)
-
-    def test_no_nodata(self) -> None:
-        """nodata_type other than "Nodata" yields nodata=None."""
-        bands = band_info_from_reader_info(self.make_info())
-
-        assert all(band.nodata is None for band in bands)
 
     @pytest.mark.parametrize("key", ["units", "unit", "UNITTYPE", "GRIB_UNIT"])
     def test_unit_key_variants(self, key: str) -> None:
@@ -340,10 +331,9 @@ class TestBandInfoFromReaderInfo:
 
     def test_composes_with_imagedata_converter(self) -> None:
         """bands=band_info_from_reader_info(info) works end-to-end."""
-        info = self.make_info(nodata_type="Nodata", nodata_value=-9999)
         cov = imagedata_to_coverage_input(
-            make_image(), bands=band_info_from_reader_info(info)
+            make_image(), bands=band_info_from_reader_info(self.make_info())
         )
 
         assert [band.name for band in cov.bands] == ["b1", "b2"]
-        assert cov.bands[0].nodata == -9999.0
+        assert [band.unit for band in cov.bands] == ["mm", ""]

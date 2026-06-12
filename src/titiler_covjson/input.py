@@ -56,16 +56,12 @@ class BandInfo:
         dtype: Declared band dtype; determines whether range values are
             serialized as floats, integers, or strings (see
             :func:`titiler_covjson.helpers.numpy_to_covjson_dtype`).
-        nodata: Source nodata value for the band, if known. Informational
-            only: nodata cells in :attr:`CoverageInput.data` are marked via
-            the array mask, not by comparing against this value.
     """
 
     name: str
     description: str = ""
     unit: str = ""
     dtype: npt.DTypeLike = np.float32
-    nodata: float | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -164,9 +160,9 @@ class CoverageInput:
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
     """Build per-band metadata from a rio-tiler reader ``info()`` result.
 
-    An ``ImageData`` carries values but little band semantics; descriptions,
-    units, and nodata live on the reader's ``info()``. Use this helper to
-    carry that metadata into a :class:`CoverageInput`::
+    An ``ImageData`` carries values but little band semantics; descriptions
+    and units live on the reader's ``info()``. Use this helper to carry that
+    metadata into a :class:`CoverageInput`::
 
         info = band_info_from_reader_info(reader.info())
         coverage_input = imagedata_to_coverage_input(img, bands=info)
@@ -174,9 +170,6 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
     Band names and descriptions come from ``info.band_descriptions``; units
     are probed from the per-band GDAL tags in ``info.band_metadata`` using,
     in order of precedence: ``units``, ``unit``, ``UNITTYPE``, ``GRIB_UNIT``.
-    The nodata value comes from ``info.nodata_value`` -- a field rio-tiler
-    adds dynamically (the ``Info`` model permits extra fields) only when
-    ``info.nodata_type == "Nodata"`` -- and is applied to every band.
 
     Args:
         info: A rio-tiler ``Info`` model, as returned by ``Reader.info()``.
@@ -192,29 +185,20 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
         ...     band_metadata=[("b1", {"units": "mm"}), ("b2", {})],
         ...     band_descriptions=[("b1", "precipitation"), ("b2", "")],
         ...     dtype="float32",
-        ...     nodata_type="Nodata",
-        ...     nodata_value=-9999,
+        ...     nodata_type="None",
         ... )
         >>> bands = band_info_from_reader_info(info)
-        >>> bands[0].name, bands[0].unit, bands[0].nodata
-        ('b1', 'mm', -9999.0)
+        >>> bands[0].name, bands[0].description, bands[0].unit
+        ('b1', 'precipitation', 'mm')
         >>> bands[1].description, bands[1].unit
         ('', '')
     """
-    nodata_value = getattr(info, "nodata_value", None)
-    nodata = (
-        float(nodata_value)
-        if info.nodata_type == "Nodata" and nodata_value is not None
-        else None
-    )
-
     return [
         BandInfo(
             name=name,
             description=description,
             unit=next((str(tags[key]) for key in _UNIT_TAG_KEYS if key in tags), ""),
             dtype=info.dtype,
-            nodata=nodata,
         )
         for (name, tags), (_, description) in zip(
             info.band_metadata, info.band_descriptions, strict=True
@@ -344,7 +328,7 @@ def imagedata_to_coverage_input(
     ``bands`` sequence; per-attribute overrides (``band_names``,
     ``band_descriptions``, ``band_units``); the image's own ``band_names``
     with empty descriptions and units. To carry reader-level metadata
-    (descriptions, units, nodata), pass
+    (descriptions and units), pass
     ``bands=band_info_from_reader_info(reader.info())``.
 
     Args:
