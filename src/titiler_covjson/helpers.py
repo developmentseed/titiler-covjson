@@ -251,18 +251,18 @@ def numpy_dtype_to_ndarray(
     shape = list(data.shape)
 
     if covjson_dtype == "float":
-        floats = data.filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call]
+        floats = data.filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call, unused-ignore]
         return NdArrayFloat(values=floats, axisNames=list(axis_names), shape=shape)
 
     # For int/str, build a boolean mask array (never scalar).
-    mask: list[bool] = np.ma.getmaskarray(data).flatten().tolist()  # type: ignore[no-untyped-call]
+    mask: list[bool] = np.ma.getmaskarray(data).flatten().tolist()  # type: ignore[no-untyped-call, unused-ignore]
 
     if covjson_dtype == "integer":
-        unmasked_ints = data.filled(0).flatten().tolist()  # type: ignore[no-untyped-call]
+        unmasked_ints = data.filled(0).flatten().tolist()  # type: ignore[no-untyped-call, unused-ignore]
         ints = [None if m else int(v) for v, m in zip(unmasked_ints, mask, strict=True)]
         return NdArrayInt(values=ints, axisNames=list(axis_names), shape=shape)
 
-    unmasked_strs: list[str] = data.filled("").flatten().tolist()  # type: ignore[no-untyped-call]
+    unmasked_strs: list[str] = data.filled("").flatten().tolist()  # type: ignore[no-untyped-call, unused-ignore]
     strs = [None if m else v for v, m in zip(unmasked_strs, mask, strict=True)]
     return NdArrayStr(values=strs, axisNames=list(axis_names), shape=shape)
 

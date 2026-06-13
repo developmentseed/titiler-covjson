@@ -1,0 +1,26 @@
+# EditorConfig (https://editorconfig.org): one source of truth for indentation
+# and whitespace -- for editors AND for shfmt. The pre-commit shfmt hook runs
+# with only `-w` (no printer flags, no -s), so shfmt reads the keys below; the
+# `[*.sh]` indent_size + switch_case_indent settings give Google Shell Style.
+# Passing any printer flag (-i, -ci, ...) or -s on the CLI would make shfmt
+# ignore this file, so the hook deliberately does not.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.py]
+indent_size = 4
+
+[*.sh]
+indent_size = 2
+# shfmt-specific key: indent `case` alternatives (the Google Shell Style rule,
+# equivalent to shfmt's -ci). Editors ignore it; shfmt reads it.
+switch_case_indent = true
+
+[*.{yml,yaml}]
+indent_size = 2
