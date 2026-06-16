@@ -3,7 +3,8 @@ name = "titiler-covjson"
 version = "0.1.0"
 description = "CoverageJSON output format and API extension for TiTiler"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     { name = "Emmanuel Mathot", email = "emmanuel@developmentseed.org" },
@@ -11,9 +12,10 @@ authors = [
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -38,7 +40,9 @@ Repository = "https://github.com/DevelopmentSeed/titiler-covjson"
 Issues = "https://github.com/DevelopmentSeed/titiler-covjson/issues"
 
 [build-system]
-requires = ["hatchling"]
+# hatchling >= 1.27 defaults to core metadata 2.4, required to emit the PEP 639
+# SPDX `license` expression and `license-files` declared in [project].
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
@@ -49,7 +53,7 @@ dev = [
     "httpx",
     "ruff",
     "mypy",
-    "pre-commit",
+    "prek",
     "types-shapely>=2.1.0.20260508",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20260508",
@@ -65,9 +69,11 @@ asyncio_mode = "auto"
 addopts = ["--doctest-modules"]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]
 
-[tool.ruff]
-target-version = "py310"
+[tool.coverage.run]
+source = ["src/titiler_covjson"]
+branch = true
 
+# No [tool.ruff] target-version: ruff infers it from project.requires-python.
 [tool.ruff.lint]
 preview = true
 select = [
@@ -87,7 +93,9 @@ select = [
 
 [tool.mypy]
 files = ["src", "tests"]
-python_version = "3.10"
+# No python_version: mypy uses the running interpreter, and the CI typecheck
+# matrix runs it under every supported version (the lowest covers the
+# requires-python floor) -- so the version is not duplicated here.
 strict = true
 
 [[tool.mypy.overrides]]

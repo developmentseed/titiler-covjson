@@ -803,7 +803,9 @@ class TestSection962NdArrayRoundtrip:
 
     def test_helper_masked_floats_are_nan(self) -> None:
         """numpy_dtype_to_ndarray masked floats are NaN in model_dump() output."""
-        arr = np.ma.array(self.no_missing_values, mask=self.mask).reshape(4, 2)
+        arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.array(
+            self.no_missing_values, mask=self.mask
+        ).reshape(4, 2)
         nd = numpy_dtype_to_ndarray(arr, np.float64, ["y", "x"])
         data = nd.model_dump()
 
@@ -817,7 +819,9 @@ class TestSection962NdArrayRoundtrip:
 
     def test_helper_float_ndarray_roundtrip_stable(self) -> None:
         """Helper-produced NdArrayFloat round-trips to identical JSON."""
-        arr = np.ma.array(self.no_missing_values, mask=self.mask).reshape(4, 2)
+        arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.array(
+            self.no_missing_values, mask=self.mask
+        ).reshape(4, 2)
         nd = numpy_dtype_to_ndarray(arr, np.float64, ["y", "x"])
         json_str = nd.model_dump_json()
         assert json_str == NdArrayFloat.model_validate_json(json_str).model_dump_json()

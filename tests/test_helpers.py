@@ -33,6 +33,16 @@ class TestCrsToOgcUri:
         with pytest.raises(ValueError, match="no recognised authority code"):
             crs_to_ogc_uri(crs)
 
+    def test_unsupported_authority_raises(self) -> None:
+        """A recognised but unsupported authority (not EPSG/OGC) raises ValueError.
+
+        ESRI:54009 (World Mollweide) has no EPSG equivalent, so ``to_authority()``
+        returns ``("ESRI", ...)`` -- exercising the path where an authority *is*
+        found but is absent from the supported URI templates.
+        """
+        with pytest.raises(ValueError, match="no recognised authority code"):
+            crs_to_ogc_uri(rasterio.CRS.from_string("ESRI:54009"))
+
 
 class TestNumpyDtypeToNdarray:
     """Test numpy masked array to CoverageJSON NdArray conversion."""
