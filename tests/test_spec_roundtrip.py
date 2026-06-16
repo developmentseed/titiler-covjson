@@ -27,11 +27,9 @@ its output is structurally consistent with the spec and also round-trips stably.
 #   DomainType enum validator, so no roundtrip test is possible until they
 #   are added to the enum.
 #
-# NdArray / TiledNdArray gaps:
-#   TiledNdArrayInt / TiledNdArrayStr —- the spec allows integer and string
-#   dataType on TiledNdArray objects, but no model class exists for them.
-#   Only TiledNdArrayFloat is implemented (see coverage.py NdArrayTypes and
-#   ndarray.py). Upstream issue: https://github.com/KNMI/covjson-pydantic/issues/31
+# (The earlier TiledNdArray integer/string gap, covjson-pydantic issue #31, was
+# resolved in 0.8.0: a single TiledNdArray model now accepts float, integer, and
+# string dataType. See TestSection962TiledNdArray below.)
 
 from __future__ import annotations
 
@@ -872,19 +870,21 @@ class TestSection962NdArrayStr:
         assert result["values"][1] is None
 
 
-class TestSection962TiledNdArrayFloat:
-    """Spec section 9.6.3: TiledNdArray with float dataType and URL templates.
+class TestSection962TiledNdArray:
+    """Spec section 9.6.3: TiledNdArray with URL templates, all three dataTypes.
 
-    The model only implements ``TiledNdArrayFloat``; integer and string tiled
-    arrays (present in the playground ``grid-tiled.covjson``) cannot be parsed.
-    Upstream issue (covjson-pydantic missing TiledNdArrayInt/Str):
-    https://github.com/KNMI/covjson-pydantic/issues/31
+    covjson-pydantic 0.8.0 unified ``TiledNdArray`` to accept ``float``,
+    ``integer``, and ``string`` dataType, resolving the earlier gap where only a
+    float-typed tiled array could be parsed (covjson-pydantic issue #31:
+    https://github.com/KNMI/covjson-pydantic/issues/31). The integer example
+    below mirrors the ``FOO`` range of the playground ``grid-tiled.covjson``
+    (see ``TestPlaygroundGridTiled`` in ``test_playground_roundtrip.py``).
 
     No ``test_schema_valid`` here: the vendored schema has no ``TiledNdArray``
     definition (only ``ndArray``), so there is nothing to validate against.
     """
 
-    SPEC_TILED: dict[str, Any] = {
+    SPEC_TILED_FLOAT: dict[str, Any] = {
         "type": "TiledNdArray",
         "dataType": "float",
         "axisNames": ["t", "y", "x"],
@@ -901,9 +901,43 @@ class TestSection962TiledNdArrayFloat:
         ],
     }
 
-    def test_spec_tiled_ndarray_parses(self) -> None:
-        """TiledNdArrayFloat parses with correct type, shape and axisNames."""
-        nd = parse(TiledNdArray, self.SPEC_TILED)
+    SPEC_TILED_INT: dict[str, Any] = {
+        "type": "TiledNdArray",
+        "dataType": "integer",
+        "axisNames": ["t", "y", "x"],
+        "shape": [2, 5, 10],
+        "tileSets": [
+            {
+                "tileShape": [None, 2, 3],
+                "urlTemplate": "https://example.com/tiles/{t}-{y}-{x}.covjson",
+            },
+            {
+                "tileShape": [None, None, None],
+                "urlTemplate": "https://example.com/tiles/all.covjson",
+            },
+        ],
+    }
+
+    SPEC_TILED_STR: dict[str, Any] = {
+        "type": "TiledNdArray",
+        "dataType": "string",
+        "axisNames": ["t", "y", "x"],
+        "shape": [2, 5, 10],
+        "tileSets": [
+            {
+                "tileShape": [None, 2, 3],
+                "urlTemplate": "https://example.com/tiles/{t}-{y}-{x}.covjson",
+            },
+            {
+                "tileShape": [None, None, None],
+                "urlTemplate": "https://example.com/tiles/all.covjson",
+            },
+        ],
+    }
+
+    def test_spec_tiled_ndarray_float_parses(self) -> None:
+        """Float TiledNdArray parses with correct type, shape and axisNames."""
+        nd = parse(TiledNdArray, self.SPEC_TILED_FLOAT)
         assert nd.type == "TiledNdArray"
         assert nd.dataType == "float"
         assert nd.shape == [2, 5, 10]
@@ -912,12 +946,32 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_url_templates_preserved(self) -> None:
         """TiledNdArray urlTemplate values survive round-trip unchanged."""
-        result = roundtrip(TiledNdArray, self.SPEC_TILED)
+        result = roundtrip(TiledNdArray, self.SPEC_TILED_FLOAT)
         assert result["tileSets"][0]["urlTemplate"] == (
             "https://example.com/tiles/{t}-{y}-{x}.covjson"
         )
         assert result["tileSets"][0]["tileShape"] == [None, 2, 3]
 
-    def test_spec_tiled_ndarray_roundtrip_stable(self) -> None:
-        """TiledNdArrayFloat round-trips to identical JSON."""
-        assert roundtrip_is_stable(TiledNdArray, self.SPEC_TILED)
+    def test_spec_tiled_ndarray_float_roundtrip_stable(self) -> None:
+        """Float TiledNdArray round-trips to identical JSON."""
+        assert roundtrip_is_stable(TiledNdArray, self.SPEC_TILED_FLOAT)
+
+    def test_spec_tiled_ndarray_integer_parses(self) -> None:
+        """Integer TiledNdArray parses with dataType 'integer'."""
+        nd = parse(TiledNdArray, self.SPEC_TILED_INT)
+        assert nd.dataType == "integer"
+        assert nd.shape == [2, 5, 10]
+
+    def test_spec_tiled_ndarray_integer_roundtrip_stable(self) -> None:
+        """Integer TiledNdArray round-trips to identical JSON."""
+        assert roundtrip_is_stable(TiledNdArray, self.SPEC_TILED_INT)
+
+    def test_spec_tiled_ndarray_string_parses(self) -> None:
+        """String TiledNdArray parses with dataType 'string'."""
+        nd = parse(TiledNdArray, self.SPEC_TILED_STR)
+        assert nd.dataType == "string"
+        assert nd.shape == [2, 5, 10]
+
+    def test_spec_tiled_ndarray_string_roundtrip_stable(self) -> None:
+        """String TiledNdArray round-trips to identical JSON."""
+        assert roundtrip_is_stable(TiledNdArray, self.SPEC_TILED_STR)

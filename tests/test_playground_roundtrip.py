@@ -15,16 +15,20 @@ documented in the test-class docstring.
 # Playground gaps — files that cannot currently be tested
 # ---------------------------------------------------------------------------
 #
-# grid-tiled.covjson is blocked by two independent issues:
+# grid-tiled.covjson is now tested (TestPlaygroundGridTiled), but not verbatim:
+# its year-only t values ("2010", "2011") are silently coerced to Unix
+# timestamps (~1970-01-01T00:33:30Z) by pydantic's non-strict
+# ValuesAxis[AwareDatetime] -- the same data-corruption hazard documented in
+# TestPlaygroundPolygonSeries -- so the test adapts them to full RFC 3339
+# timestamps. The integer TiledNdArray range that previously also blocked this
+# file (covjson-pydantic issue #31) was resolved in 0.8.0, which unified
+# TiledNdArray to accept float, integer, and string dataType.
 #
-#   (1) Year-only t values ("2010", "2011") are silently coerced to Unix
-#       timestamps (~1970-01-01T00:33:30Z) by pydantic's non-strict
-#       ValuesAxis[AwareDatetime] — the same data-corruption hazard
-#       documented in TestPlaygroundPolygonSeries.
-#   (2) The range uses TiledNdArray with dataType "integer"; the model only
-#       provides TiledNdArrayFloat (dataType "float").  Integer and string
-#       tiled arrays are noted as TODO in covjson-pydantic/ndarray.py.
-#       Upstream issue: https://github.com/KNMI/covjson-pydantic/issues/31
+# TODO(upstream): the year-only t-value coercion has no covjson-pydantic issue
+# yet. File an issue/PR proposing strict parsing (or rejection) of incomplete
+# RFC 3339 date strings so they are not silently corrupted to 1970 timestamps.
+# Once fixed and released, this example and TestPlaygroundPolygonSeries can use
+# the verbatim playground year values.
 #
 # multipolygon.covjson is blocked because "MultiPolygon" is absent from the
 # DomainType enum.  The following spec types share this limitation and also
@@ -39,6 +43,7 @@ import pytest
 from conftest import assert_schema_valid, parse, roundtrip, roundtrip_is_stable
 from covjson_pydantic.coverage import Coverage, CoverageCollection
 from covjson_pydantic.domain import CompactAxis, Domain, ValuesAxis
+from covjson_pydantic.ndarray import TiledNdArray
 
 
 class TestPlaygroundGrid:
@@ -124,6 +129,116 @@ class TestPlaygroundGrid:
 
     def test_schema_valid(self) -> None:
         """Playground grid.covjson Coverage validates against the schema."""
+        assert_schema_valid(parse(Coverage, self.EXAMPLE))
+
+
+class TestPlaygroundGridTiled:
+    """Playground grid-tiled.covjson: Coverage / Grid with a TiledNdArray range.
+
+    The integer-typed ``TiledNdArray`` range is now parseable as of
+    covjson-pydantic 0.8.0 (issue #31, which unified ``TiledNdArray`` to accept
+    float, integer, and string dataType).
+
+    Adaptation: the playground file uses year-only t values (``"2010"``,
+    ``"2011"``). Under the non-strict ``ValuesAxis[AwareDatetime]`` those are
+    silently coerced to Unix timestamps near 1970 (the data-corruption hazard
+    documented in ``TestPlaygroundPolygonSeries``), so this example uses the
+    equivalent full RFC 3339 timestamps instead. Everything else -- the three
+    tileSets, their ``tileShape`` / ``urlTemplate`` values, and the integer
+    dataType -- is verbatim from the playground file.
+
+    TODO(upstream): no covjson-pydantic issue tracks the year-only coercion yet.
+    File an issue/PR (see the module-level note) so that the verbatim playground
+    t values can be used here once incomplete date strings are parsed strictly
+    or rejected rather than silently corrupted.
+    """
+
+    EXAMPLE: dict[str, Any] = {
+        "type": "Coverage",
+        "domain": {
+            "type": "Domain",
+            "domainType": "Grid",
+            "axes": {
+                "x": {"start": -100, "stop": 100, "num": 10},
+                "y": {"start": -50, "stop": 50, "num": 5},
+                "t": {"values": ["2010-01-01T00:00:00Z", "2011-01-01T00:00:00Z"]},
+            },
+            "referencing": [
+                {
+                    "coordinates": ["x", "y"],
+                    "system": {
+                        "type": "GeographicCRS",
+                        "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+                    },
+                },
+                {
+                    "coordinates": ["t"],
+                    "system": {"type": "TemporalRS", "calendar": "Gregorian"},
+                },
+            ],
+        },
+        "parameters": {
+            "FOO": {
+                "type": "Parameter",
+                "observedProperty": {"label": {"en": "Bar"}},
+            }
+        },
+        "ranges": {
+            "FOO": {
+                "type": "TiledNdArray",
+                "dataType": "integer",
+                "axisNames": ["t", "y", "x"],
+                "shape": [2, 5, 10],
+                "tileSets": [
+                    {
+                        "tileShape": [None, 2, 3],
+                        "urlTemplate": "https://covjson.org/playground/coverages/grid-tiled/a/{y}-{x}.covjson",
+                    },
+                    {
+                        "tileShape": [1, None, None],
+                        "urlTemplate": "https://covjson.org/playground/coverages/grid-tiled/b/{t}.covjson",
+                    },
+                    {
+                        "tileShape": [None, None, None],
+                        "urlTemplate": "https://covjson.org/playground/coverages/grid-tiled/c/all.covjson",
+                    },
+                ],
+            }
+        },
+    }
+
+    def test_parses(self) -> None:
+        """Playground grid-tiled.covjson parses as Coverage with Grid domainType."""
+        cov = parse(Coverage, self.EXAMPLE)
+        assert cov.domain.domainType is not None
+        assert cov.domain.domainType.value == "Grid"
+
+    def test_integer_tiled_range(self) -> None:
+        """The FOO range parses as an integer-typed TiledNdArray."""
+        cov = parse(Coverage, self.EXAMPLE)
+        assert cov.ranges is not None
+        foo = cov.ranges["FOO"]
+        assert isinstance(foo, TiledNdArray)
+        assert foo.dataType == "integer"
+        assert foo.shape == [2, 5, 10]
+        assert len(foo.tileSets) == 3
+
+    def test_tile_url_templates_preserved(self) -> None:
+        """TiledNdArray tileShape and urlTemplate values survive round-trip."""
+        result = roundtrip(Coverage, self.EXAMPLE)
+        tile_sets = result["ranges"]["FOO"]["tileSets"]
+        assert tile_sets[0]["tileShape"] == [None, 2, 3]
+        assert tile_sets[1]["tileShape"] == [1, None, None]
+        assert tile_sets[2]["urlTemplate"] == (
+            "https://covjson.org/playground/coverages/grid-tiled/c/all.covjson"
+        )
+
+    def test_roundtrip_stable(self) -> None:
+        """Playground grid-tiled.covjson Coverage round-trips to identical JSON."""
+        assert roundtrip_is_stable(Coverage, self.EXAMPLE)
+
+    def test_schema_valid(self) -> None:
+        """Playground grid-tiled.covjson Coverage validates against the schema."""
         assert_schema_valid(parse(Coverage, self.EXAMPLE))
 
 
