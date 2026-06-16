@@ -15,17 +15,17 @@ its output is structurally consistent with the spec and also round-trips stably.
 # Spec model gaps — features that cannot currently be tested
 # ---------------------------------------------------------------------------
 #
-# Domain types absent from the DomainType enum (spec OGC 21-069r2 §9.10):
+# Domain types absent from the DomainType enum (spec OGC 21-069r2 Section 9.10):
 #
-#   - Section            (§9.10.8)
-#   - Polygon            (§9.10.9 -— standalone single-polygon, distinct from
-#                                    PolygonSeries)
-#   - MultiPolygon       (§9.10.11)
-#   - MultiPolygonSeries (§9.10.12)
+#   - Section            (Section 9.10.8)
+#   - MultiPolygon       (Section 9.10.11)
+#   - MultiPolygonSeries (Section 9.10.12)
 #
-#   All four are accepted by the spec but raise a ValidationError from the
+#   All three are accepted by the spec but raise a ValidationError from the
 #   DomainType enum validator, so no roundtrip test is possible until they
-#   are added to the enum.
+#   are added to the enum. (The standalone Polygon type, Section 9.10.9, was
+#   added in covjson-pydantic 0.8.0 via KNMI/covjson-pydantic#30 and is now
+#   tested in TestSection96Polygon below.)
 #
 # (The earlier TiledNdArray integer/string gap, covjson-pydantic issue #31, was
 # resolved in 0.8.0: a single TiledNdArray model now accepts float, integer, and
@@ -751,6 +751,155 @@ class TestSection96MultiPointSeries:
     def test_spec_multi_point_series_schema_valid(self) -> None:
         """MultiPointSeries domain validates against the schema 'domain' def."""
         assert_schema_valid(parse(Domain, self.SPEC_MULTI_POINT_SERIES), "domain")
+
+
+class TestSection96Polygon:
+    """Spec section 9.6 / 9.10.9: Polygon domain (single polygon, no t axis).
+
+    The standalone Polygon domainType was added in covjson-pydantic 0.8.0
+    (KNMI/covjson-pydantic#30); before then only PolygonSeries existed. The
+    composite axis holds a single polygon -- a list of linear rings, the first
+    exterior and any others holes -- each ring a closed list of (x, y) pairs.
+    """
+
+    SPEC_POLYGON: dict[str, Any] = {
+        "type": "Domain",
+        "domainType": "Polygon",
+        "axes": {
+            "composite": {
+                "dataType": "polygon",
+                "coordinates": ["x", "y"],
+                "values": [
+                    [
+                        [
+                            [100.0, 0.0],
+                            [101.0, 0.0],
+                            [101.0, 1.0],
+                            [100.0, 1.0],
+                            [100.0, 0.0],
+                        ],
+                        [
+                            [100.2, 0.2],
+                            [100.8, 0.2],
+                            [100.8, 0.8],
+                            [100.2, 0.8],
+                            [100.2, 0.2],
+                        ],
+                    ]
+                ],
+            }
+        },
+        "referencing": [
+            {
+                "coordinates": ["x", "y"],
+                "system": {
+                    "type": "GeographicCRS",
+                    "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+                },
+            }
+        ],
+    }
+
+    def test_spec_polygon_parses(self) -> None:
+        """Polygon domain parses with a composite axis and no t axis."""
+        domain = parse(Domain, self.SPEC_POLYGON)
+        assert domain.domainType is not None
+        assert domain.domainType.value == "Polygon"
+        assert domain.axes.composite is not None
+        assert domain.axes.t is None
+
+    def test_spec_polygon_rings(self) -> None:
+        """Polygon composite axis carries one polygon with exterior ring and hole."""
+        domain = parse(Domain, self.SPEC_POLYGON)
+        assert domain.axes.composite is not None
+        assert domain.axes.composite.dataType == "polygon"
+        polygons = domain.axes.composite.values
+        assert len(polygons) == 1
+        assert len(polygons[0]) == 2  # exterior ring + one hole
+        exterior = polygons[0][0]
+        assert exterior[0] == exterior[-1]  # closed ring
+
+    def test_spec_polygon_roundtrip_stable(self) -> None:
+        """Polygon domain round-trips to identical JSON."""
+        assert roundtrip_is_stable(Domain, self.SPEC_POLYGON)
+
+    def test_spec_polygon_schema_valid(self) -> None:
+        """Polygon domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.SPEC_POLYGON), "domain")
+
+
+class TestSection96PolygonSeries:
+    """Spec section 9.6 / 9.10.10: PolygonSeries domain (composite + t axes).
+
+    A spec-level companion to the playground ``TestPlaygroundPolygonSeries``: a
+    single polygon observed at several time steps.
+    """
+
+    SPEC_POLYGON_SERIES: dict[str, Any] = {
+        "type": "Domain",
+        "domainType": "PolygonSeries",
+        "axes": {
+            "composite": {
+                "dataType": "polygon",
+                "coordinates": ["x", "y"],
+                "values": [
+                    [
+                        [
+                            [100.0, 0.0],
+                            [101.0, 0.0],
+                            [101.0, 1.0],
+                            [100.0, 1.0],
+                            [100.0, 0.0],
+                        ]
+                    ]
+                ],
+            },
+            "t": {
+                "values": [
+                    "2008-01-01T00:00:00Z",
+                    "2008-01-02T00:00:00Z",
+                ]
+            },
+        },
+        "referencing": [
+            {
+                "coordinates": ["x", "y"],
+                "system": {
+                    "type": "GeographicCRS",
+                    "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+                },
+            },
+            {
+                "coordinates": ["t"],
+                "system": {"type": "TemporalRS", "calendar": "Gregorian"},
+            },
+        ],
+    }
+
+    def test_spec_polygon_series_parses(self) -> None:
+        """PolygonSeries domain parses with both composite and t axes."""
+        domain = parse(Domain, self.SPEC_POLYGON_SERIES)
+        assert domain.domainType is not None
+        assert domain.domainType.value == "PolygonSeries"
+        assert domain.axes.composite is not None
+        assert domain.axes.t is not None
+
+    def test_spec_polygon_series_axes(self) -> None:
+        """PolygonSeries has one polygon observed at two time steps."""
+        domain = parse(Domain, self.SPEC_POLYGON_SERIES)
+        assert domain.axes.composite is not None
+        assert domain.axes.composite.dataType == "polygon"
+        assert len(domain.axes.composite.values) == 1
+        assert isinstance(domain.axes.t, ValuesAxis)
+        assert len(domain.axes.t.values) == 2
+
+    def test_spec_polygon_series_roundtrip_stable(self) -> None:
+        """PolygonSeries domain round-trips to identical JSON."""
+        assert roundtrip_is_stable(Domain, self.SPEC_POLYGON_SERIES)
+
+    def test_spec_polygon_series_schema_valid(self) -> None:
+        """PolygonSeries domain validates against the schema 'domain' def."""
+        assert_schema_valid(parse(Domain, self.SPEC_POLYGON_SERIES), "domain")
 
 
 # ---------------------------------------------------------------------------

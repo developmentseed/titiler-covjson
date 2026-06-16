@@ -17,23 +17,25 @@ documented in the test-class docstring.
 #
 # grid-tiled.covjson is now tested (TestPlaygroundGridTiled), but not verbatim:
 # its year-only t values ("2010", "2011") are silently coerced to Unix
-# timestamps (~1970-01-01T00:33:30Z) by pydantic's non-strict
-# ValuesAxis[AwareDatetime] -- the same data-corruption hazard documented in
-# TestPlaygroundPolygonSeries -- so the test adapts them to full RFC 3339
-# timestamps. The integer TiledNdArray range that previously also blocked this
-# file (covjson-pydantic issue #31) was resolved in 0.8.0, which unified
-# TiledNdArray to accept float, integer, and string dataType.
+# timestamps (~1970-01-01T00:33:30Z) by pydantic's ValuesAxis[AwareDatetime]
+# -- the same data-corruption hazard documented in TestPlaygroundPolygonSeries
+# -- so the test adapts them to full RFC 3339 timestamps. The integer
+# TiledNdArray range that previously also blocked this file (covjson-pydantic
+# issue #31) was resolved in 0.8.0, which unified TiledNdArray to accept float,
+# integer, and string dataType.
 #
-# TODO(upstream): the year-only t-value coercion has no covjson-pydantic issue
-# yet. File an issue/PR proposing strict parsing (or rejection) of incomplete
-# RFC 3339 date strings so they are not silently corrupted to 1970 timestamps.
-# Once fixed and released, this example and TestPlaygroundPolygonSeries can use
-# the verbatim playground year values.
+# Tracked upstream: KNMI/covjson-pydantic#34. Reduced-precision dates like
+# "2010" are EXPLICITLY VALID per OGC 21-069r2 Section 9.5.2, so the fix must
+# preserve the lexical string, not reject it (a Python datetime cannot hold
+# reduced precision). Once a fix is released, this example and
+# TestPlaygroundPolygonSeries can use the verbatim playground year values.
 #
 # multipolygon.covjson is blocked because "MultiPolygon" is absent from the
 # DomainType enum.  The following spec types share this limitation and also
-# have no playground examples: Section (§9.10.8), Polygon (§9.10.9),
-# MultiPolygonSeries (§9.10.12).
+# have no playground examples: Section (Section 9.10.8) and MultiPolygonSeries
+# (Section 9.10.12). (The standalone Polygon type, Section 9.10.9, became
+# available in covjson-pydantic 0.8.0 and is covered by TestSection96Polygon in
+# test_spec_roundtrip.py.)
 
 from __future__ import annotations
 
@@ -140,17 +142,16 @@ class TestPlaygroundGridTiled:
     float, integer, and string dataType).
 
     Adaptation: the playground file uses year-only t values (``"2010"``,
-    ``"2011"``). Under the non-strict ``ValuesAxis[AwareDatetime]`` those are
-    silently coerced to Unix timestamps near 1970 (the data-corruption hazard
-    documented in ``TestPlaygroundPolygonSeries``), so this example uses the
-    equivalent full RFC 3339 timestamps instead. Everything else -- the three
-    tileSets, their ``tileShape`` / ``urlTemplate`` values, and the integer
-    dataType -- is verbatim from the playground file.
+    ``"2011"``). ``ValuesAxis[AwareDatetime]`` silently coerces those to Unix
+    timestamps near 1970 (the data-corruption hazard documented in
+    ``TestPlaygroundPolygonSeries``), so this example uses the equivalent full
+    RFC 3339 timestamps instead. Everything else -- the three tileSets, their
+    ``tileShape`` / ``urlTemplate`` values, and the integer dataType -- is
+    verbatim from the playground file.
 
-    TODO(upstream): no covjson-pydantic issue tracks the year-only coercion yet.
-    File an issue/PR (see the module-level note) so that the verbatim playground
-    t values can be used here once incomplete date strings are parsed strictly
-    or rejected rather than silently corrupted.
+    Tracked upstream as KNMI/covjson-pydantic#34 (see the module-level note):
+    reduced-precision dates are spec-valid, so the verbatim playground t values
+    can be used here once a fix that preserves them is released.
     """
 
     EXAMPLE: dict[str, Any] = {
@@ -1258,9 +1259,10 @@ class TestPlaygroundPolygonSeries:
 
     Adaptation: year-only t values (``"2013"``, ``"2014"``, ``"2015"``) promoted
     to ``T00:00:00Z`` AwareDatetime strings.  Pydantic silently coerces bare
-    year strings to Unix timestamps (``"1970-01-01T00:33:33Z"`` etc.) when
-    ``ValuesAxis[AwareDatetime]`` is in non-strict mode, so the unadapted
-    values must not be used.
+    year strings to Unix timestamps (``"1970-01-01T00:33:33Z"`` etc.) through
+    ``ValuesAxis[AwareDatetime]``, so the unadapted values must not be used.
+    Tracked upstream as KNMI/covjson-pydantic#34; reduced-precision dates are
+    spec-valid (OGC 21-069r2 Section 9.5.2), so the fix must preserve them.
     """
 
     EXAMPLE: dict[str, Any] = {
