@@ -1874,7 +1874,7 @@ wheels = [
 
 [[package]]
 name = "rio-tiler"
-version = "7.9.5"
+version = "7.9.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -1891,9 +1891,9 @@ dependencies = [
     { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/88/0f/ac3177f82b14087efb6f022cce41ec833883ab86933f84dfe0477e1cd46b/rio_tiler-7.9.5.tar.gz", hash = "sha256:a94c651cfd3ff7bce0474627080ddeb01ce0e45800a397a6b10c1a5355821b1d", size = 176205, upload-time = "2026-03-24T17:43:48.407Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/d6/5ddcb11282d6c99942609b84e913879e2953412ec0adcfae7361f42296c6/rio_tiler-7.9.6.tar.gz", hash = "sha256:e290a7fcfb792225a08e4640e7d95fe445369b44aa5923dec30aef70d7d3541b", size = 176582, upload-time = "2026-06-04T09:48:20.875Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/3e/c49bd1ddf571b89d39a96ec7d63ecd8818f4aef33b00f479231260afe43a/rio_tiler-7.9.5-py3-none-any.whl", hash = "sha256:4000894b49093bc2f32deea7d0565f1bf362c39faade05e1737f93ab9e299383", size = 270499, upload-time = "2026-03-24T17:43:49.717Z" },
+    { url = "https://files.pythonhosted.org/packages/58/b4/feab24bf872d14b81c6b62d1f9eb8c81a32c8be449ea3555f95eb74b57e2/rio_tiler-7.9.6-py3-none-any.whl", hash = "sha256:d088a12a8fd56e306db417f4ecfccd700468a753c70dafa62ecbce76a8f67dd4", size = 270898, upload-time = "2026-06-04T09:48:22.529Z" },
 ]
 
 [[package]]
@@ -2268,7 +2268,7 @@ docs = [
 requires-dist = [
     { name = "covjson-pydantic", specifier = ">=0.7.0,<1.0" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "rio-tiler", specifier = ">=7.0,<8.0" },
+    { name = "rio-tiler", specifier = ">=7.9.6,<8.0" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "titiler-core", specifier = ">=0.18.0,<1.0" },
     { name = "ucumvert", specifier = ">=0.2.2" },
