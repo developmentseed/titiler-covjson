@@ -135,6 +135,12 @@ jobs:
         with:
           python-version: ${{ fromJSON(needs.config.outputs.python-versions)[0] }}
           enable-cache: true
+          # This job runs on the minimum Python (python-versions[0]), the same
+          # version as the `test` matrix's first entry. Without a distinct
+          # suffix both jobs derive an identical setup-uv cache key and race to
+          # save it, so one logs a "failed to save cache" warning. Namespace
+          # this job's cache to keep the keys separate.
+          cache-suffix: coverage
       - name: Install dependencies
         run: uv sync --locked --quiet
       - name: Run tests with coverage
