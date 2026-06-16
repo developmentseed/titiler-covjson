@@ -47,7 +47,7 @@ from covjson_pydantic.ndarray import (
     NdArrayFloat,
     NdArrayInt,
     NdArrayStr,
-    TiledNdArrayFloat,
+    TiledNdArray,
 )
 from covjson_pydantic.parameter import Parameter, ParameterGroup
 from covjson_pydantic.reference_system import (
@@ -903,7 +903,7 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_parses(self) -> None:
         """TiledNdArrayFloat parses with correct type, shape and axisNames."""
-        nd = parse(TiledNdArrayFloat, self.SPEC_TILED)
+        nd = parse(TiledNdArray, self.SPEC_TILED)
         assert nd.type == "TiledNdArray"
         assert nd.dataType == "float"
         assert nd.shape == [2, 5, 10]
@@ -912,7 +912,7 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_url_templates_preserved(self) -> None:
         """TiledNdArray urlTemplate values survive round-trip unchanged."""
-        result = roundtrip(TiledNdArrayFloat, self.SPEC_TILED)
+        result = roundtrip(TiledNdArray, self.SPEC_TILED)
         assert result["tileSets"][0]["urlTemplate"] == (
             "https://example.com/tiles/{t}-{y}-{x}.covjson"
         )
@@ -920,4 +920,4 @@ class TestSection962TiledNdArrayFloat:
 
     def test_spec_tiled_ndarray_roundtrip_stable(self) -> None:
         """TiledNdArrayFloat round-trips to identical JSON."""
-        assert roundtrip_is_stable(TiledNdArrayFloat, self.SPEC_TILED)
+        assert roundtrip_is_stable(TiledNdArray, self.SPEC_TILED)

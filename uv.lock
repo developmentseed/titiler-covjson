@@ -451,14 +451,14 @@ toml = [
 
 [[package]]
 name = "covjson-pydantic"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/77/c5/5e7c474ce0a804ff759d4549aab227f6778264684a7040be60f089713a79/covjson_pydantic-0.7.0.tar.gz", hash = "sha256:9642672ce6c566a1a6dc6c1923c8dce13226cca43cc82b3c871421b521aaa5e2", size = 21366, upload-time = "2025-05-09T11:28:53.337Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4b/2b/130ad9c7b5318974c1aa5da0d73c3c948f695002793253b99ffc896f2dc6/covjson_pydantic-0.8.0.tar.gz", hash = "sha256:66fb12da6634b22ff3c401b3b1e3e42a1abe8dc7830283a0655ca3ec9fc9ade0", size = 22114, upload-time = "2026-06-16T14:36:30.655Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/a0/8e0d62342e1905b85ac9cd89da7ca0b8010258cc265d7163aae0e0177baa/covjson_pydantic-0.7.0-py3-none-any.whl", hash = "sha256:af47bff748174d08c426e208e6ae829bfa2f8c4b6a5343ac82c1209f83bfccd1", size = 14149, upload-time = "2025-05-09T11:28:52.373Z" },
+    { url = "https://files.pythonhosted.org/packages/db/91/318355d3a76ee3d52cddf1e4e3c63eb942e80fe917d853722cdeecb09832/covjson_pydantic-0.8.0-py3-none-any.whl", hash = "sha256:c38ce951d2991403a252a28919eb2912cb0c34bf76ddca2fb8d4d1aac31a27bc", size = 14152, upload-time = "2026-06-16T14:36:29.692Z" },
 ]
 
 [[package]]
@@ -2266,7 +2266,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "covjson-pydantic", specifier = ">=0.7.0,<1.0" },
+    { name = "covjson-pydantic", specifier = ">=0.8.0,<1.0" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "rio-tiler", specifier = ">=7.9.6,<8.0" },
     { name = "shapely", specifier = ">=2.0" },
