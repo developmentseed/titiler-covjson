@@ -94,8 +94,9 @@ class CoverageInput:
         geometry: Source geometry for non-grid domains -- e.g., the queried
             point, the transect line, or the aggregation polygon; ``None``
             for gridded rasters.
-        bands: Per-band metadata. May be empty, in which case the modeler
-            synthesizes generic band identities.
+        bands: Per-band metadata, one entry per band. Resolved at construction:
+            when not supplied, generic ``b1, b2, ...`` identities are synthesized
+            (see ``__post_init__``), so this is always populated afterwards.
         timestamps: ISO 8601 / RFC 3339 timestamps for temporal data (e.g.,
             one per STAC item in a time series); ``None`` for purely spatial
             data.
@@ -132,7 +133,7 @@ class CoverageInput:
     item_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        """Validate array dimensionality, band count, and 2-D timestamps.
+        """Validate the data/band/timestamp invariants, then resolve ``bands``.
 
         Mostly domain-independent invariants. The one domain-shaped exception
         is timestamps against 2-D point/profile data: there the sample axis is
@@ -143,11 +144,18 @@ class CoverageInput:
         eventually, the per-domain input variants -- see
         ``docs/04-modeler-converter-design.md``, Section 7).
 
+        As a final step ``bands`` is resolved: when empty it is populated with
+        synthesized ``b1, b2, ...`` identities (assigned via
+        ``object.__setattr__``, as the dataclass is frozen), so it is never empty
+        after construction.
+
         Raises:
             ValueError: If ``data`` is not 2-D or 3-D with at least 1 band; if
-                ``bands`` is non-empty and its length does not match
-                ``data.shape[0]``; or if ``data`` is 2-D and ``len(timestamps)``
-                does not match the sample axis ``data.shape[-1]``.
+                any ``data`` axis is empty (size 0); if ``bands`` is non-empty and
+                its length does not match ``data.shape[0]``; if two ``bands`` share
+                a name (names become CoverageJSON keys, so must be unique); or if
+                ``data`` is 2-D and ``len(timestamps)`` does not match the sample
+                axis ``data.shape[-1]``.
         """
 
         if self.data.ndim not in {2, 3} or self.data.shape[0] == 0:
@@ -157,12 +165,31 @@ class CoverageInput:
                 f"with {self.data.shape[0]} band(s)"
             )
             raise ValueError(msg)
+
+        # No data axis may be empty: a zero-size height/width/sample axis is a
+        # degenerate coverage and would otherwise surface as an opaque CompactAxis
+        # error (num must be a positive cell count) deep in the modeler.
+        if 0 in self.data.shape:
+            msg = (
+                "CoverageInput data axes must all be non-empty; "
+                f"got shape {self.data.shape}"
+            )
+            raise ValueError(msg)
+
         if self.bands and len(self.bands) != self.data.shape[0]:
             msg = (
                 f"Number of bands ({len(self.bands)}) does not match "
                 f"data.shape[0] ({self.data.shape[0]})"
             )
             raise ValueError(msg)
+
+        # Band names become CoverageJSON range/parameter keys, so they must be
+        # unique; duplicates would silently collapse entries in the modeler.
+        if self.bands and len({band.name for band in self.bands}) != len(self.bands):
+            names = [band.name for band in self.bands]
+            msg = f"CoverageInput band names must be unique; got {names}"
+            raise ValueError(msg)
+
         if (
             self.timestamps is not None
             and self.data.ndim == 2
@@ -173,6 +200,24 @@ class CoverageInput:
                 f"the sample axis data.shape[-1] ({self.data.shape[-1]})"
             )
             raise ValueError(msg)
+
+        # Resolve bands once, at construction, so every consumer can read a
+        # populated `bands` tuple without re-deriving defaults. It arrives
+        # populated from converters (e.g., imagedata_to_coverage_input, via the
+        # image's band_names); it is empty only on direct array construction
+        # without metadata -- the modeler's array-only test path. Synthesize
+        # b1, b2, ... then, matching rio-tiler's default band naming so
+        # synthesized and converter-supplied identities are indistinguishable.
+        # (frozen dataclass: assign through object.__setattr__.)
+        if not self.bands:
+            object.__setattr__(
+                self,
+                "bands",
+                tuple(
+                    BandInfo(name=f"b{i + 1}", dtype=self.data.dtype)
+                    for i in range(self.data.shape[0])
+                ),
+            )
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:

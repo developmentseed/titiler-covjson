@@ -48,7 +48,7 @@ numpy arrays + metadata (bands, CRS, bounds, timestamps)
 CoverageInput (intermediate representation)
     |
     v
-RasterCovJSONModeler (conversion logic)
+Modeler functions (to_coverage; conversion logic)
     |
     v
 covjson-pydantic Models (Coverage, Domain, Range, Parameter...)
@@ -60,7 +60,7 @@ JSON Response (application/prs.coverage+json)
 ### Key Design Decisions
 
 - **TiTiler extension**: Implemented as a FastAPI router that plugs into TiTiler, not a standalone service
-- **Data-agnostic modeler**: A `RasterCovJSONModeler` converts an intermediate `CoverageInput` to CovJSON, decoupled from specific readers
+- **Data-agnostic modeler**: Stateless module-level functions (`to_coverage`) convert an intermediate `CoverageInput` to CovJSON, decoupled from specific readers
 - **covjson-pydantic**: Uses the [KNMI covjson-pydantic](https://github.com/KNMI/covjson-pydantic) library (Pydantic v2) for spec-compliant model serialization
 - **Domain type auto-detection**: Geometry type determines CovJSON domain type (Grid for raster, Point/PointSeries for point queries, Trajectory for transects, etc.)
 - **Grid-native**: Raster data naturally maps to CovJSON Grid domains, the most common case

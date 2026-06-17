@@ -60,7 +60,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Estimated effort**: S (1-2 days)
 
-### Story 3: RasterCovJSONModeler - Core Conversion Logic
+### Story 3: Modeler - Core Conversion Logic
 
 **Priority**: P0 (Foundation)
 
@@ -68,8 +68,8 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 **Tasks**:
 
-- [ ] Create `titiler_covjson/modeler.py` with RasterCovJSONModeler class
-- [ ] Implement domain type detection (`_get_domain_type`)
+- [x] Create `titiler_covjson/modeler.py` with the modeler conversion functions (`to_coverage`); stateless module functions, not a class
+- [ ] Implement domain dispatch (per-domain input union + `match`, per doc 04 Section 7) -- the Grid-only path currently guards non-grid inputs rather than detecting a domain type
 - [ ] Implement axis creation for all domain types (`_create_axes`)
   - Grid (start/stop/num)
   - Point/PointSeries (x, y, optional z, optional t)
