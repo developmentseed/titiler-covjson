@@ -196,8 +196,9 @@ class TestImagedataToCoverageInput:
         )
         cov = imagedata_to_coverage_input(make_image(arr))
 
-        assert cov.data.mask[0, 0, 0]
-        assert not cov.data.mask[1, 0, 0]
+        cov_mask = np.ma.getmaskarray(cov.data)
+        assert cov_mask[0, 0, 0]
+        assert not cov_mask[1, 0, 0]
         assert cov.data[1, 0, 0] == 1.0
 
     def test_plain_array_gets_materialized_mask(self) -> None:
