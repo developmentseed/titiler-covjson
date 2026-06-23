@@ -125,7 +125,7 @@ A JSON Schema-based validator with a Python CLI tool and runtime validation logi
 **No custom Pydantic models needed.** Add `covjson-pydantic` as a dependency and use its models directly. Custom code is limited to:
 
 1. **`CoverageInput` dataclass** (bridge between rio-tiler and covjson-pydantic)
-2. **`RasterCovJSONModeler`** (conversion logic: numpy arrays -> covjson-pydantic objects)
+2. **Modeler functions** (`to_coverage`; conversion logic: numpy arrays -> covjson-pydantic objects)
 3. **FastAPI routes** (endpoint definitions, parameter handling)
 4. **TiTiler integration** (router extension, content type registration)
 5. **Unit/CRS mapping helpers** (UCUM symbols, EPSG->OGC URI conversion)
@@ -170,5 +170,5 @@ httpx                                # FastAPI test client
 | 2 | **Use `covjson-validator` in integration tests** | Catches spec violations that Pydantic alone might miss (axis/shape consistency, monotonicity) |
 | 3 | **Vendor validator schemas, don't depend on the repo** | The repo isn't pip-installable and has deprecated deps; extract the JSON Schema files |
 | 4 | **Contribute Polygon domain type upstream** | Benefits the community; reduces local maintenance burden |
-| 5 | **Keep `CoverageInput` + `RasterCovJSONModeler` as custom code** | Neither library provides the raster->CovJSON conversion bridge |
+| 5 | **Keep `CoverageInput` + the modeler functions as custom code** | Neither library provides the raster->CovJSON conversion bridge |
 | 6 | **Pin `covjson-pydantic` minor version** | Pre-1.0 library; avoid surprise breaking changes |

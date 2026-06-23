@@ -486,7 +486,7 @@ class TestPlaygroundPoint:
             "POTM": {
                 "type": "Parameter",
                 "description": {
-                    "en": "The potential temperature, in degrees celcius,"
+                    "en": "The potential temperature, in degrees celsius,"
                     " of the sea water"
                 },
                 "unit": {
@@ -622,7 +622,7 @@ class TestPlaygroundPointSeries:
             "POTM": {
                 "type": "Parameter",
                 "description": {
-                    "en": "The potential temperature, in degrees celcius,"
+                    "en": "The potential temperature, in degrees celsius,"
                     " of the sea water"
                 },
                 "unit": {

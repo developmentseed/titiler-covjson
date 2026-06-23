@@ -5,7 +5,7 @@
 The **Modeler** is the layer that converts raster data (rio-tiler ImageData, numpy arrays, STAC metadata) into CovJSON model objects (via covjson-pydantic). It follows a clean separation of concerns:
 
 ```plain
-rio-tiler data  -->  CoverageInput (intermediate)  -->  RasterCovJSONModeler  -->  covjson-pydantic Coverage
+rio-tiler data  -->  CoverageInput (intermediate)  -->  modeler (to_coverage)  -->  covjson-pydantic Coverage
 ```
 
 ## 2. Conversion Flow
@@ -72,7 +72,7 @@ class CoverageInput:
     crs: rasterio.CRS
     geometry: BaseGeometry | None = None  # For non-grid domains
 
-    # Band/variable metadata (may be empty; modeler synthesizes identities)
+    # Band/variable metadata; resolved to one entry per band at construction
     bands: tuple[BandInfo, ...] = ()
 
     # Temporal info (optional)
@@ -88,6 +88,26 @@ class CoverageInput:
 Domain-dependent consistency (geometry vs. timestamps vs. array shape) is
 deferred to the modeler -- see Section 7 for the planned evolution that removes
 this split.
+
+`__post_init__` also **resolves `bands` once, at construction**: when `bands` is
+empty it synthesizes one `BandInfo` per leading-axis band (`b1, b2, ...`,
+matching rio-tiler's default band naming), assigning through
+`object.__setattr__` because the dataclass is frozen. So `bands` is never empty
+afterwards and every consumer reads a populated tuple -- the default-band naming
+convention lives here, in one place, rather than being duplicated in the modeler.
+
+This intentionally erases the distinction between "the caller supplied no band
+metadata" and "the caller supplied bands". That is consistent with
+`CoverageInput`'s role as the *post-resolution* representation: all precedence
+and enrichment (explicit `bands` > per-attribute kwargs > the reader's own
+`band_names`) is resolved upstream in the converters (Section 5), which still
+hold the raw reader info. The realistic consumers of "were bands supplied?" --
+e.g., a strict mode that rejects placeholder parameters, or metadata enrichment
+from a STAC item's `eo:bands` -- all live at that converter/endpoint layer,
+where the signal is still available; none need it on `CoverageInput`. If such a
+need ever does reach this layer, the clean fix is an explicit converter flag or
+a `bands_supplied` field, not reconstructing intent from a resolved
+`CoverageInput`.
 
 ### 3.1 Single-array, data-cube constraint
 
@@ -117,32 +137,62 @@ its own array and dtype) rather than a single `(bands, ...)` array. Defer
 this until a concrete endpoint requires it; the Section 7 union refactor is
 independent and addresses domain shape, not band heterogeneity.
 
-## 4. RasterCovJSONModeler
+## 4. Modeler
+
+The modeler is a set of **stateless module-level functions** in `modeler.py`,
+not a class. The conversion holds no state and depends only on the neutral
+`CoverageInput`, so a class would add ceremony without benefit. (If
+configuration ever needs to be threaded through -- e.g., a `TiledNdArray` size
+threshold in Story 12 -- introduce a function argument or a small frozen config
+object rather than reviving a stateful class.)
+
+The public entry point is `to_coverage`:
 
 ```python
-class RasterCovJSONModeler:
-    """Converts raster data to CovJSON Coverage objects."""
+def to_coverage(coverage_input: CoverageInput) -> Coverage:
+    domain = _create_grid_domain(coverage_input)
+    parameters = _create_parameters(coverage_input)
+    ranges = _create_grid_ranges(coverage_input)
+    return Coverage(domain=domain, parameters=parameters, ranges=ranges)
+```
 
-    def to_coverage(self, input: CoverageInput) -> Coverage:
-        domain = self._create_domain(input)
-        parameters = self._create_parameters(input)
-        ranges = self._create_ranges(input, domain)
-        return Coverage(domain=domain, parameters=parameters, ranges=ranges)
+**Current status (Grid only).** `to_coverage` implements the Grid domain
+(gridded rasters, `geometry is None`). It guards the cases it does not yet handle
+with `NotImplementedError`: a non-`None` `geometry` (a non-grid domain), and data
+that is not 3-D `(bands, height, width)` (`CoverageInput` also permits 2-D
+point/profile data, which must not reach the grid path). Multi-domain support
+arrives via the per-domain input union and `match` dispatch in Section 7 --
+chosen at the second domain type rather than building out the `_get_domain_type`
+inference sketched in Section 4.1.
 
-    def to_coverage_collection(self, inputs: list[CoverageInput]) -> CoverageCollection:
-        parameters = self._create_parameters(inputs[0])
-        references = self._get_references(inputs[0])
-        coverages = []
-        for inp in inputs:
-            cov = self.to_coverage(inp)
-            cov.parameters = {}  # Hoisted to collection level
-            coverages.append(cov)
-        return CoverageCollection(
-            coverages=coverages, parameters=parameters, referencing=references
-        )
+`to_coverage_collection` is its planned sibling for multi-result responses (**not
+yet implemented**): build one coverage per input, then hoist the shared
+`parameters` and `referencing` to the collection level and clear them on the
+member coverages.
+
+```python
+def to_coverage_collection(inputs: list[CoverageInput]) -> CoverageCollection:
+    parameters = _create_parameters(inputs[0])
+    references = _get_references(inputs[0])
+    coverages = []
+    for coverage_input in inputs:
+        cov = to_coverage(coverage_input)
+        cov.parameters = {}  # Hoisted to collection level
+        coverages.append(cov)
+    return CoverageCollection(
+        coverages=coverages, parameters=parameters, referencing=references
+    )
 ```
 
 ### 4.1 Domain Type Detection
+
+> **Status**: not implemented as written. The Grid-only modeler (Section 4)
+> guards non-grid inputs with `NotImplementedError` instead of detecting a
+> domain type. When the second domain type lands, the per-domain input union
+> (Section 7) supersedes this inference entirely -- the variant is selected
+> *explicitly* by the endpoint, not detected from `geometry` + `shape`. The
+> sketch below is retained for the design rationale (and the Polygon discussion
+> that follows).
 
 ```python
 def _get_domain_type(self, input: CoverageInput) -> DomainType:
@@ -179,7 +229,7 @@ def _get_domain_type(self, input: CoverageInput) -> DomainType:
 
 | Domain Type | Axes Produced |
 | --- | --- |
-| Grid | `x: CompactAxis(start=west, stop=east, num=w)`, `y: CompactAxis(start=north, stop=south, num=h)` |
+| Grid | `x`/`y` `CompactAxis` of cell *centers*, inset half a cell from the bounds edges: `x` runs `west + dx/2 .. east - dx/2` (`dx = (east-west)/w`), `y` runs `north + dy/2 .. south - dy/2` (`dy = (south-north)/h`) |
 | Point / PointSeries | `x: ValuesAxis[float]`, `y: ValuesAxis[float]`, optionally `z`, optionally `t` |
 | MultiPoint | `composite: ValuesAxis[Tuple]` |
 | Polygon / PolygonSeries | `composite: ValuesAxis` with polygon rings, optionally `t` |
@@ -399,8 +449,8 @@ exhaustiveness checking:
 ```python
 from typing import assert_never  # typing_extensions on Python < 3.11
 
-def to_coverage(self, input: CoverageInput) -> Coverage:
-    match input:
+def to_coverage(coverage_input: CoverageInput) -> Coverage:
+    match coverage_input:
         case GridInput():
             ...
         case GridSeriesInput():

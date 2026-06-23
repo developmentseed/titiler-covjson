@@ -83,7 +83,8 @@ class TestCoverageInput:
         """A 3-D masked array with bounds and CRS is sufficient."""
         cov = masked_input(np.ma.MaskedArray(np.zeros((1, 2, 2))))
 
-        assert cov.bands == ()
+        # bands is resolved at construction, so it is never empty afterwards.
+        assert [band.name for band in cov.bands] == ["b1"]
         assert cov.geometry is None
         assert cov.timestamps is None
         assert cov.collection_id is None
@@ -164,12 +165,52 @@ class TestCoverageInput:
 
         assert len(cov.timestamps or ()) == 5
 
+    def test_duplicate_band_names_raises(self) -> None:
+        """Band names become CovJSON keys, so they must be unique."""
+        with pytest.raises(ValueError, match="unique"):
+            CoverageInput(
+                data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
+                bounds=BOUNDS,
+                crs=CRS,
+                bands=(BandInfo("x"), BandInfo("x")),
+            )
+
+    @pytest.mark.parametrize("shape", [(1, 0, 2), (1, 2, 0), (2, 0)])
+    def test_empty_data_axis_raises(self, shape: tuple[int, ...]) -> None:
+        """A zero-size data axis (e.g., an empty raster) is rejected early."""
+        with pytest.raises(ValueError, match="non-empty"):
+            masked_input(np.ma.MaskedArray(np.zeros(shape)))
+
     def test_frozen(self) -> None:
         """CoverageInput is immutable."""
         cov = masked_input(np.ma.MaskedArray(np.zeros((1, 2, 2))))
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             cov.data = np.ma.MaskedArray(np.zeros((1, 2, 2)))  # type: ignore[misc]
+
+
+class TestBandSynthesis:
+    """Test construction-time resolution of CoverageInput.bands."""
+
+    def test_supplied_bands_kept_unchanged(self) -> None:
+        """When bands are supplied, they are stored as-is (no synthesis)."""
+        bands = (BandInfo("red"), BandInfo("nir"))
+        cov = CoverageInput(
+            data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
+            bounds=BOUNDS,
+            crs=CRS,
+            bands=bands,
+        )
+
+        assert cov.bands == bands
+
+    def test_absent_bands_synthesized_at_construction(self) -> None:
+        """With no bands, one b1, b2, ... entry per band is synthesized."""
+        cov = masked_input(np.ma.MaskedArray(np.zeros((3, 2, 2), dtype="int16")))
+
+        assert [band.name for band in cov.bands] == ["b1", "b2", "b3"]
+        # Synthesized bands share the data's dtype, so range typing is correct.
+        assert all(band.dtype == np.dtype("int16") for band in cov.bands)
 
 
 class TestImagedataToCoverageInput:

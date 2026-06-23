@@ -244,9 +244,12 @@ def numpy_dtype_to_ndarray(
         >>> nd = numpy_dtype_to_ndarray(arr, np.float32, ["y", "x"])
         >>> nd.shape
         [2, 2]
+        >>> nd.dataType
+        'float'
         >>> nd.values
         [1.5, 2.5, 3.5, 4.5]
     """
+
     covjson_dtype = numpy_to_covjson_dtype(dtype)
     shape = list(data.shape)
 
