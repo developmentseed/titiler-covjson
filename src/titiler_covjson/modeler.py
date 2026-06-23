@@ -76,12 +76,13 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
         >>> cov.domain.domainType.value
         'Grid'
 
+        Axes carry cell *centers* (inset half a cell from the bounds edges):
         ``x`` runs west->east and ``y`` north->south (raster row 0 is north):
 
         >>> cov.domain.axes.x.start, cov.domain.axes.x.stop, cov.domain.axes.x.num
-        (-10.0, 10.0, 2)
+        (-5.0, 5.0, 2)
         >>> cov.domain.axes.y.start, cov.domain.axes.y.stop, cov.domain.axes.y.num
-        (5.0, -5.0, 2)
+        (2.5, -2.5, 2)
 
         Each band becomes a parameter (here with its UCUM unit resolved) and a
         matching range whose axes line up with the grid:
@@ -120,22 +121,25 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
 
 
 def _compact_axis(first: float, last: float, num: int) -> CompactAxis:
-    """Build a CompactAxis spanning ``first``..``last`` over ``num`` cells.
+    """Build a CompactAxis of cell centers spanning the ``first``..``last`` edges.
+
+    A CompactAxis describes the coordinates at which cells are defined -- the cell
+    *centers* -- whereas ``first``/``last`` are the outer bounds *edges*. The
+    centers are inset from the edges by half a cell, so for ``num`` cells spanning
+    ``first``..``last`` the axis runs ``first + dx/2`` .. ``last - dx/2`` where
+    ``dx = (last - first) / num``.
 
     Args:
-        first: Coordinate of the first cell (e.g., the west or north edge).
-        last: Coordinate of the last cell (e.g., the east or south edge).
+        first: Outer edge of the first cell (e.g., the west or north bound).
+        last: Outer edge of the last cell (e.g., the east or south bound).
         num: Number of cells along the axis.
 
     Returns:
-        CompactAxis: The axis. When ``num == 1`` the endpoints collapse to the
-            midpoint, since CompactAxis requires ``start == stop`` for a single cell.
+        CompactAxis: The axis of cell centers. When ``num == 1`` both centers
+            coincide at the bounds midpoint, satisfying ``start == stop``.
     """
-    if num == 1:
-        midpoint = (first + last) / 2
-        return CompactAxis(start=midpoint, stop=midpoint, num=1)
-
-    return CompactAxis(start=first, stop=last, num=num)
+    half_cell = (last - first) / (2 * num)
+    return CompactAxis(start=first + half_cell, stop=last - half_cell, num=num)
 
 
 def _create_grid_domain(coverage_input: CoverageInput) -> Domain:
@@ -150,10 +154,10 @@ def _create_grid_domain(coverage_input: CoverageInput) -> Domain:
     west, south, east, north = coverage_input.bounds
     height, width = coverage_input.data.shape[-2:]
 
-    # CompactAxis describes a regular axis by its endpoints and cell count.
-    # x runs west->east; y runs north->south to match raster row order
-    # (row 0 is the north edge). Endpoints use the bounds edges; pixel-center
-    # offsets are a possible later refinement.
+    # CompactAxis describes a regular axis by its cell-center endpoints and cell
+    # count. x runs west->east; y runs north->south to match raster row order
+    # (row 0 is the north edge). _compact_axis insets the bounds edges by half a
+    # cell to yield the centers.
 
     return Domain(
         domainType=DomainType.grid,

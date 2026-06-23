@@ -86,15 +86,18 @@ class TestGridCoverage:
         assert isinstance(cov, Coverage)
         assert cov.domain.domainType == DomainType.grid
 
-        # x spans west..east over `width` columns; y spans north..south over
-        # `height` rows (raster row 0 is the north edge).
+        # Axes carry cell *centers*, inset half a cell from the bounds edges:
+        # x runs west..east over `width` columns, y runs north..south over
+        # `height` rows (raster row 0 is the north edge). Bounds are
+        # -10..10 (x) over 2 cols -> centers -5, 5; 5..-5 (y) over 2 rows ->
+        # centers 2.5, -2.5.
         assert isinstance(cov.domain.axes.x, CompactAxis)
-        assert cov.domain.axes.x.start == -10.0
-        assert cov.domain.axes.x.stop == 10.0
+        assert cov.domain.axes.x.start == -5.0
+        assert cov.domain.axes.x.stop == 5.0
         assert cov.domain.axes.x.num == 2
         assert isinstance(cov.domain.axes.y, CompactAxis)
-        assert cov.domain.axes.y.start == 5.0
-        assert cov.domain.axes.y.stop == -5.0
+        assert cov.domain.axes.y.start == 2.5
+        assert cov.domain.axes.y.stop == -2.5
         assert cov.domain.axes.y.num == 2
 
         assert set(cov.ranges) == {"b1"}
@@ -122,11 +125,11 @@ class TestGridCoverage:
         axis: str,
         expected: tuple[float, float, int],
     ) -> None:
-        """A 1-cell axis collapses to its bounds midpoint.
+        """A 1-cell axis's single center is the bounds midpoint.
 
-        CompactAxis requires ``start == stop`` when ``num == 1``, so a single
-        row or column cannot use the edge endpoints; it uses their midpoint
-        (here 0.0, the centre of the symmetric -10..10 / -5..5 bounds).
+        With one cell the center sits half a cell in from each edge, i.e., at
+        the bounds midpoint, so ``start == stop`` (here 0.0, the centre of the
+        symmetric -10..10 / -5..5 bounds).
         """
         data = _masked(np.zeros(shape, dtype="float32"))
         cov = to_coverage(_grid_input(data))

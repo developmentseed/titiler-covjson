@@ -229,7 +229,7 @@ def _get_domain_type(self, input: CoverageInput) -> DomainType:
 
 | Domain Type | Axes Produced |
 | --- | --- |
-| Grid | `x: CompactAxis(start=west, stop=east, num=w)`, `y: CompactAxis(start=north, stop=south, num=h)` |
+| Grid | `x`/`y` `CompactAxis` of cell *centers*, inset half a cell from the bounds edges: `x` runs `west + dx/2 .. east - dx/2` (`dx = (east-west)/w`), `y` runs `north + dy/2 .. south - dy/2` (`dy = (south-north)/h`) |
 | Point / PointSeries | `x: ValuesAxis[float]`, `y: ValuesAxis[float]`, optionally `z`, optionally `t` |
 | MultiPoint | `composite: ValuesAxis[Tuple]` |
 | Polygon / PolygonSeries | `composite: ValuesAxis` with polygon rings, optionally `t` |
