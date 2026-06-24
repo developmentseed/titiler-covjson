@@ -36,6 +36,13 @@ Coverage(domain, parameters, ranges)
 
 ## 3. CoverageInput Data Class
 
+> **Status (#22).** The single `CoverageInput` shown here has been split into a
+> per-domain union (Section 7.5): a shared base plus one frozen dataclass per
+> domain, of which only `GridInput` exists so far, with `CoverageInput` now an
+> alias for that union. On the Grid variant `bounds` is required and there is no
+> `geometry`, no `timestamps`, and no 2-D data path. The sketch below records the
+> original pre-union design.
+
 The intermediate representation between TiTiler's data access and CovJSON
 serialization, implemented in `src/titiler_covjson/input.py` (Story 2):
 
@@ -53,7 +60,6 @@ class BandInfo:
     description: str = ""
     unit: str = ""  # raw UCUM code; resolved via helpers.create_unit
     dtype: npt.DTypeLike = np.float32
-    nodata: float | None = None
 
 @dataclass(frozen=True, eq=False)
 class CoverageInput:
@@ -150,20 +156,25 @@ The public entry point is `to_coverage`:
 
 ```python
 def to_coverage(coverage_input: CoverageInput) -> Coverage:
-    domain = _create_grid_domain(coverage_input)
-    parameters = _create_parameters(coverage_input)
-    ranges = _create_grid_ranges(coverage_input)
-    return Coverage(domain=domain, parameters=parameters, ranges=ranges)
+    match coverage_input:
+        case GridInput():
+            return Coverage(
+                domain=_create_grid_domain(coverage_input),
+                parameters=_create_parameters(coverage_input),
+                ranges=_create_grid_ranges(coverage_input),
+            )
+        case _:
+            assert_never(coverage_input)
 ```
 
-**Current status (Grid only).** `to_coverage` implements the Grid domain
-(gridded rasters, `geometry is None`). It guards the cases it does not yet handle
-with `NotImplementedError`: a non-`None` `geometry` (a non-grid domain), and data
-that is not 3-D `(bands, height, width)` (`CoverageInput` also permits 2-D
-point/profile data, which must not reach the grid path). Multi-domain support
-arrives via the per-domain input union and `match` dispatch in Section 7 --
-chosen at the second domain type rather than building out the `_get_domain_type`
-inference sketched in Section 4.1.
+**Current status (Grid only).** The per-domain input union (Section 7) has
+landed for the Grid variant (#22): `to_coverage` dispatches on the variant via
+`match` with `assert_never` (version-guarded: stdlib on Python 3.11+,
+`typing_extensions` on 3.10), and `GridInput` enforces its own 3-D shape
+contract at construction, so the old `geometry`/`ndim` `NotImplementedError`
+guards are gone. Point and PointSeries variants follow in #23, and
+`to_coverage_collection` in #24; until #23, the alias `CoverageInput =
+GridInput` has a single member.
 
 `to_coverage_collection` is its planned sibling for multi-result responses (**not
 yet implemented**): build one coverage per input, then hoist the shared
@@ -186,12 +197,10 @@ def to_coverage_collection(inputs: list[CoverageInput]) -> CoverageCollection:
 
 ### 4.1 Domain Type Detection
 
-> **Status**: not implemented as written. The Grid-only modeler (Section 4)
-> guards non-grid inputs with `NotImplementedError` instead of detecting a
-> domain type. When the second domain type lands, the per-domain input union
-> (Section 7) supersedes this inference entirely -- the variant is selected
-> *explicitly* by the endpoint, not detected from `geometry` + `shape`. The
-> sketch below is retained for the design rationale (and the Polygon discussion
+> **Status**: superseded and partially implemented. As of #22 the modeler
+> dispatches on explicit per-domain variants (Section 7), not on inferred domain
+> type; `_get_domain_type()` is not implemented and will not be. The sketch
+> below is retained only for the design rationale (and the Polygon discussion
 > that follows).
 
 ```python
@@ -202,7 +211,7 @@ def _get_domain_type(self, input: CoverageInput) -> DomainType:
     geom_type = input.geometry.geom_type
     mapping = {
         "Point":      (DomainType.point_series, DomainType.point),
-        "Polygon":    (DomainType.polygon_series, DomainType.polygon_series),  # workaround
+        "Polygon":    (DomainType.polygon_series, DomainType.polygon),
         "MultiPoint": (DomainType.multi_point_series, DomainType.multi_point),
         "LineString": (DomainType.trajectory, DomainType.trajectory),
     }
@@ -211,19 +220,20 @@ def _get_domain_type(self, input: CoverageInput) -> DomainType:
     raise ValueError(f"Unsupported geometry type: {geom_type}")
 ```
 
-> **NOTE on the Polygon workaround**: the `"Polygon" -> polygon_series`
-> mapping above (for the no-timestamps case) is NOT implementable as
-> sketched -- both the CoverageJSON spec and `covjson-pydantic` require a
-> `t` axis on a PolygonSeries domain (verified: `ValidationError` from
-> `covjson-pydantic` 0.7.0). The decision (2026-06-11) is to wait for the
-> Polygon domain type to land upstream
-> ([KNMI/covjson-pydantic#30](https://github.com/KNMI/covjson-pydantic/pull/30),
-> approved 2026-06-11): the modeler raises `NotImplementedError` for
-> polygon-without-time until then, after which the mapping becomes
-> `"Polygon": (polygon_series, polygon)` and the dependency pin bumps to
-> `covjson-pydantic>=0.8.0`. Polygon is only needed by Story 5
-> (`format=aggregated`) and Story 9, so this does not block the modeler
-> (Story 3) or the first endpoints.
+> **NOTE on the former Polygon workaround (resolved)**: the no-timestamps
+> `"Polygon" -> polygon` mapping above was not implementable against
+> `covjson-pydantic` 0.7.0 -- that release (with the CoverageJSON spec)
+> required a `t` axis on PolygonSeries, the only polygon domain it offered, so
+> a polygon without time had nowhere valid to go. The standalone Polygon domain
+> type landed upstream in
+> [KNMI/covjson-pydantic#30](https://github.com/KNMI/covjson-pydantic/pull/30),
+> released in `covjson-pydantic` 0.8.0; the dependency pin is now
+> `covjson-pydantic>=0.8.0`, so the mapping is simply
+> `"Polygon": (polygon_series, polygon)` -- no workaround, no
+> `NotImplementedError`. (`MultiPolygon`, `MultiPolygonSeries`, and `Section`
+> remain absent from the upstream `DomainType` enum.) Polygon support is only
+> needed by Story 5 (`format=aggregated`) and Story 9, so this never blocked
+> the modeler (Story 3) or the first endpoints.
 
 ### 4.2 Axis Creation
 
@@ -238,6 +248,10 @@ def _get_domain_type(self, input: CoverageInput) -> DomainType:
 ## 5. TiTiler Integration Points
 
 ### 5.1 Converting rio-tiler ImageData to CoverageInput
+
+> **Status (#22).** The converter now returns `GridInput` and no longer accepts
+> `geometry` or `timestamps` (Section 7.5). The signature sketch and the
+> `geometry` rationale below describe the original design; treat them as history.
 
 Implemented in `src/titiler_covjson/input.py` (Story 2):
 
@@ -282,7 +296,7 @@ Earlier drafts of this section proposed only `band_names`,
 implementation added four parameters, each for a distinct reason:
 
 - **`bands`**: the per-attribute string lists provide no route for
-  reader-level metadata -- in particular, `BandInfo.nodata` cannot be
+  reader-level metadata -- in particular, `BandInfo.dtype` cannot be
   expressed through them at all. Accepting complete `BandInfo` sequences is
   what lets `band_info_from_reader_info(reader.info())` compose with the
   converter, fulfilling the Story 2 task "band metadata extraction from
@@ -328,14 +342,17 @@ def transect_to_coverage_input(url: str, line: LineString, resolution: float, ..
 
 ## 7. Planned Evolution: Per-Domain Input Union
 
-> **Status**: design sketch, not yet implemented. Defer until Story 3 adds
-> its second or third domain type; do not refactor speculatively. Recorded
-> here so the intent survives until then.
+> **Status**: in progress. The union has landed for the Grid variant (#22);
+> Point/PointSeries join in #23 and `to_coverage_collection` in #24. Only the
+> variants needed so far are built (Grid now; Point/PointSeries next) -- the
+> remaining variants in the Section 7.2 sketch (GridSeries, MultiPoint,
+> Trajectory, PolygonSeries) stay a forward design until their stories land,
+> when `assert_never` plus mypy will force each to be handled.
 
 ### 7.1 Motivation
 
 This refactor addresses **domain shape** (Grid vs Point vs Trajectory vs
-...); it is orthogonal to the single-array, data-cube constraint in §3.1.
+...); it is orthogonal to the single-array, data-cube constraint in Section 3.1.
 The two can be decided independently: per-domain variants do not change band
 semantics, and moving to a `Sequence[BandData]` later would not affect the
 variant split.
@@ -354,10 +371,9 @@ has structural problems that grow with each domain type:
    4-D arrays, and loosening it to "2-D, 3-D, or 4-D depending on context"
    means the invariant is no longer checkable where the data lives.
 3. **Domain inference is lossy and error-prone.** `_get_domain_type()`
-   (Section 4.1) guesses the domain from `geometry` + `timestamps` + `shape`. The
-   mapping already needs a Polygon->PolygonSeries workaround, and a caller
-   who accidentally attaches a geometry silently flips a Grid coverage into
-   a Point coverage -- producing structurally valid but wrong CovJSON that
+   (Section 4.1) guesses the domain from `geometry` + `timestamps` + `shape`, so a
+   caller who accidentally attaches a geometry silently flips a Grid coverage
+   into a Point coverage -- producing structurally valid but wrong CovJSON that
    only a client discovers.
 4. **No exhaustiveness checking.** Adding a domain type to a single-class
    design means finding every `if`/`elif` in the modeler by hand.
@@ -482,3 +498,28 @@ starting with Grid. Split into this union when adding the second or third
 domain type -- i.e., as soon as `_get_domain_type()` / shape validation starts
 accumulating domain-conditional branches -- with the real axis-creation
 requirements in view rather than guessed in advance.
+
+### 7.5 Implementation status and decisions
+
+The union is delivered in three stacked PRs under #18:
+
+- **#22 (this):** `_CoverageInputBase` + `GridInput`, `CoverageInput` as a
+  one-member alias, `match` dispatch with `assert_never` exhaustiveness
+  (version-guarded: stdlib on Python 3.11+, `typing_extensions` on 3.10, declared
+  as a `python_version < "3.11"` conditional dependency), and
+  `imagedata_to_coverage_input()` returning `GridInput`. The converter's
+  `geometry` and `timestamps` parameters are removed -- on the grid path a
+  geometry only ever reached `NotImplementedError`, and timestamps would be a
+  GridSeries (not built). This removes the "accidental geometry silently flips
+  Grid to Point" footgun from Section 7.1.
+- **#23:** `PointInput` and `PointSeriesInput`. Point/PointSeries axes are
+  `x`/`y` value axes with an optional `z` derived from a 3-D shapely `Point`
+  (`geometry.has_z`) and, for PointSeries, a `t` axis with temporal referencing.
+  No vertical referencing system is created for `z`.
+- **#24:** `to_coverage_collection(inputs)`, which hoists shared parameters and
+  referencing to the collection level and **validates** that every input yields
+  equal parameters and referencing, raising `ValueError` on mismatch.
+
+Scope decision: only the three variants above are built now. GridSeries,
+MultiPoint, Trajectory, and PolygonSeries remain the forward design in Section
+7.2 and arrive with the stories that need them.

@@ -5,9 +5,11 @@ reads data through rio-tiler, but each read produces a different kind of
 result (``ImageData``, ``PointData``, values assembled across many STAC
 items), and none of those objects carries everything a CoverageJSON document
 needs -- band descriptions and units, timestamps, source geometry, or
-collection/item provenance. This module defines :class:`CoverageInput`, a
-single neutral container that endpoint code fills from whatever it read, and
-that the modeler consumes to build covjson-pydantic ``Coverage`` objects.
+collection/item provenance. This module defines the per-domain input variants
+that carry it -- a shared base plus one frozen dataclass per domain
+(:class:`GridInput` now; Point and PointSeries variants follow), grouped under
+the :data:`CoverageInput` alias that endpoint code fills from whatever it read
+and that the modeler consumes to build covjson-pydantic ``Coverage`` objects.
 
 Keeping this intermediate layer separate buys three things: the modeler never
 depends on rio-tiler types, changes to the rio-tiler API are contained to the
@@ -29,7 +31,6 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     import rasterio
     from rio_tiler.models import ImageData, Info
-    from shapely.geometry.base import BaseGeometry
 
 # Per-band GDAL metadata keys probed (in order) for a unit string. netCDF
 # exposes "units", GRIB uses "GRIB_UNIT", and some drivers use "UNITTYPE";
@@ -64,111 +65,70 @@ class BandInfo:
     dtype: npt.DTypeLike = np.float32
 
 
-@dataclass(frozen=True, eq=False)
-class CoverageInput:
-    """Intermediate representation of data destined for CovJSON conversion.
+@dataclass(frozen=True, eq=False, kw_only=True)
+class _CoverageInputBase:
+    """Fields and validation shared by every per-domain input variant.
 
-    A ``CoverageInput`` gathers, in one neutral container, everything the
-    modeler needs to build a CoverageJSON ``Coverage``: the data values,
-    where they are (bounds, CRS, optional geometry), what they mean
-    (per-band metadata), when they were observed (optional timestamps), and
-    where they came from (optional collection/item identifiers). Endpoint
-    code constructs one from rio-tiler results -- see
-    :func:`imagedata_to_coverage_input` -- so the modeler depends on neither
-    rio-tiler types nor on which endpoint produced the data.
+    Holds the data cube (leading axis is always bands), its CRS, the per-band
+    metadata, and optional provenance. Concrete subclasses add the
+    domain-specific fields (e.g., ``GridInput.bounds``) and a shape contract via
+    :meth:`_validate_shape`. The base is never instantiated directly; construct a
+    variant such as :class:`GridInput`.
 
     Instances compare by identity (``eq=False``): comparing masked ``data``
-    arrays element-wise is ambiguous, and two inputs that happen to hold
-    equal values are not meaningfully "the same input". The dataclass is
-    frozen and its collection fields are tuples, so instances are immutable
-    except for the contents of the ``data`` array itself, which cannot be made
-    immutable.
+    arrays element-wise is ambiguous, and two inputs holding equal values are not
+    meaningfully "the same input". Frozen with tuple collection fields, so
+    instances are immutable except for the contents of ``data`` itself.
 
     Attributes:
-        data: Data values as a masked array with shape
-            ``(bands, height, width)`` for rasters or ``(bands, n)`` for
-            point/profile data. Masked entries mark nodata and serialize as
-            ``null`` in CovJSON output.
-        bounds: Spatial bounds as ``(west, south, east, north)``.
-        crs: Coordinate reference system of ``bounds`` and ``data``.
-        geometry: Source geometry for non-grid domains -- e.g., the queried
-            point, the transect line, or the aggregation polygon; ``None``
-            for gridded rasters.
+        data: Data values as a masked array whose leading axis is bands. Masked
+            entries mark nodata and serialize as ``null`` in CovJSON output.
+        crs: Coordinate reference system of ``data``.
         bands: Per-band metadata, one entry per band. Resolved at construction:
-            when not supplied, generic ``b1, b2, ...`` identities are synthesized
-            (see ``__post_init__``), so this is always populated afterwards.
-        timestamps: ISO 8601 / RFC 3339 timestamps for temporal data (e.g.,
-            one per STAC item in a time series); ``None`` for purely spatial
-            data.
+            when not supplied, generic ``b1, b2, ...`` identities are synthesized,
+            so this is always populated afterwards.
         collection_id: Identifier of the source collection, if any.
         item_ids: Identifiers of the source items, if any.
-
-    Examples:
-        Construct an input directly when the data does not come from a single
-        rio-tiler read:
-
-        >>> import numpy as np
-        >>> import rasterio
-        >>> cov = CoverageInput(
-        ...     data=np.ma.MaskedArray(np.zeros((1, 2, 2), dtype="float32")),
-        ...     bounds=(-10.0, -5.0, 10.0, 5.0),
-        ...     crs=rasterio.CRS.from_epsg(4326),
-        ...     bands=(BandInfo("b1", unit="mm"),),
-        ... )
-        >>> cov.data.shape
-        (1, 2, 2)
-        >>> cov.bands[0].unit
-        'mm'
-        >>> cov.geometry is None  # a gridded raster
-        True
     """
 
     data: np.ma.MaskedArray[Any, np.dtype[Any]]
-    bounds: tuple[float, float, float, float]
     crs: rasterio.CRS
-    geometry: BaseGeometry | None = None
     bands: tuple[BandInfo, ...] = ()
-    timestamps: tuple[str, ...] | None = None
     collection_id: str | None = None
     item_ids: tuple[str, ...] | None = None
 
-    def __post_init__(self) -> None:
-        """Validate the data/band/timestamp invariants, then resolve ``bands``.
+    def _validate_shape(self) -> None:
+        """Validate ``data``'s shape against the variant's domain contract.
 
-        Mostly domain-independent invariants. The one domain-shaped exception
-        is timestamps against 2-D point/profile data: there the sample axis is
-        unambiguously ``data.shape[-1]``, so a ``len(timestamps)`` mismatch is
-        a construction error worth catching early (the common Point/PointSeries
-        flow). For 3-D and higher data the time axis is domain-dependent, so
-        timestamp/geometry/shape consistency there is left to the modeler (and,
-        eventually, the per-domain input variants -- see
-        ``docs/04-modeler-converter-design.md``, Section 7).
-
-        As a final step ``bands`` is resolved: when empty it is populated with
-        synthesized ``b1, b2, ...`` identities (assigned via
-        ``object.__setattr__``, as the dataclass is frozen), so it is never empty
-        after construction.
+        Overridden by each concrete variant. The base implementation is never
+        reached, since the base is not instantiated.
 
         Raises:
-            ValueError: If ``data`` is not 2-D or 3-D with at least 1 band; if
-                any ``data`` axis is empty (size 0); if ``bands`` is non-empty and
-                its length does not match ``data.shape[0]``; if two ``bands`` share
-                a name (names become CoverageJSON keys, so must be unique); or if
-                ``data`` is 2-D and ``len(timestamps)`` does not match the sample
-                axis ``data.shape[-1]``.
+            NotImplementedError: Always, on the abstract base.
         """
+        raise NotImplementedError  # pragma: no cover
 
-        if self.data.ndim not in {2, 3} or self.data.shape[0] == 0:
-            msg = (
-                "CoverageInput data must have shape (bands, height, width) or "
-                f"(bands, n), with at least 1 band; got {self.data.ndim} dimension(s) "
-                f"with {self.data.shape[0]} band(s)"
-            )
-            raise ValueError(msg)
+    def __post_init__(self) -> None:
+        """Validate the shape contract and band invariants, then resolve ``bands``.
 
-        # No data axis may be empty: a zero-size height/width/sample axis is a
-        # degenerate coverage and would otherwise surface as an opaque CompactAxis
-        # error (num must be a positive cell count) deep in the modeler.
+        Runs the variant's :meth:`_validate_shape`, then the domain-independent
+        checks (no empty data axis, band count matching ``data.shape[0]``, unique
+        band names), then resolves ``bands`` -- synthesizing ``b1, b2, ...`` when
+        empty (assigned via ``object.__setattr__``, as the dataclass is frozen),
+        matching rio-tiler's default band naming.
+
+        Raises:
+            ValueError: If the variant's shape contract is violated; if any
+                ``data`` axis is empty (size 0, which also catches zero bands); if
+                ``bands`` is non-empty and its length does not match
+                ``data.shape[0]``; or if two ``bands`` share a name (names become
+                CoverageJSON keys, so must be unique).
+        """
+        self._validate_shape()
+
+        # No data axis may be empty: a zero-size band/height/width/sample axis is
+        # a degenerate coverage and would otherwise surface as an opaque error
+        # deep in the modeler. (shape[0] == 0 -- zero bands -- is caught here too.)
         if 0 in self.data.shape:
             msg = (
                 "CoverageInput data axes must all be non-empty; "
@@ -190,25 +150,6 @@ class CoverageInput:
             msg = f"CoverageInput band names must be unique; got {names}"
             raise ValueError(msg)
 
-        if (
-            self.timestamps is not None
-            and self.data.ndim == 2
-            and len(self.timestamps) != self.data.shape[-1]
-        ):
-            msg = (
-                f"Number of timestamps ({len(self.timestamps)}) does not match "
-                f"the sample axis data.shape[-1] ({self.data.shape[-1]})"
-            )
-            raise ValueError(msg)
-
-        # Resolve bands once, at construction, so every consumer can read a
-        # populated `bands` tuple without re-deriving defaults. It arrives
-        # populated from converters (e.g., imagedata_to_coverage_input, via the
-        # image's band_names); it is empty only on direct array construction
-        # without metadata -- the modeler's array-only test path. Synthesize
-        # b1, b2, ... then, matching rio-tiler's default band naming so
-        # synthesized and converter-supplied identities are indistinguishable.
-        # (frozen dataclass: assign through object.__setattr__.)
         if not self.bands:
             object.__setattr__(
                 self,
@@ -218,6 +159,57 @@ class CoverageInput:
                     for i in range(self.data.shape[0])
                 ),
             )
+
+
+@dataclass(frozen=True, eq=False, kw_only=True)
+class GridInput(_CoverageInputBase):
+    """Grid (gridded raster) domain input.
+
+    ``data`` is a 3-D masked array shaped ``(bands, height, width)``; ``bounds``
+    gives its spatial extent in ``crs``. This is the variant
+    :func:`imagedata_to_coverage_input` produces from a rio-tiler ``ImageData``.
+
+    Attributes:
+        bounds: Spatial bounds as ``(west, south, east, north)``, in ``crs``.
+
+    Examples:
+        Construct one directly when the data does not come from a single
+        rio-tiler read:
+
+        >>> import numpy as np
+        >>> import rasterio
+        >>> cov = GridInput(
+        ...     data=np.ma.MaskedArray(np.zeros((1, 2, 2), dtype="float32")),
+        ...     bounds=(-10.0, -5.0, 10.0, 5.0),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bands=(BandInfo("b1", unit="mm"),),
+        ... )
+        >>> cov.data.shape
+        (1, 2, 2)
+        >>> cov.bands[0].unit
+        'mm'
+    """
+
+    bounds: tuple[float, float, float, float]
+
+    def _validate_shape(self) -> None:
+        """Require 3-D ``(bands, height, width)`` data.
+
+        Raises:
+            ValueError: If ``data`` is not 3-D.
+        """
+        if self.data.ndim != 3:
+            msg = (
+                "Grid data must have shape (bands, height, width); "
+                f"got {self.data.ndim} dimension(s)"
+            )
+            raise ValueError(msg)
+
+
+# Alias for the per-domain input union. Currently a single member; the point
+# variants (PointInput, PointSeriesInput) join it in #23, at which point the
+# modeler's `match` gains cases and `assert_never` enforces exhaustiveness.
+CoverageInput = GridInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
@@ -384,12 +376,10 @@ def imagedata_to_coverage_input(
     band_descriptions: Sequence[str] | None = None,
     band_units: Sequence[str] | None = None,
     crs: rasterio.CRS | None = None,
-    geometry: BaseGeometry | None = None,
-    timestamps: Sequence[str] | None = None,
     collection_id: str | None = None,
     item_ids: Sequence[str] | None = None,
-) -> CoverageInput:
-    """Convert a rio-tiler ``ImageData`` to a :class:`CoverageInput`.
+) -> GridInput:
+    """Convert a rio-tiler ``ImageData`` to a :class:`GridInput`.
 
     This is the converter used by raster (grid) endpoints: tile, bbox, and
     overview reads all yield an ``ImageData``. The image's masked array is
@@ -412,13 +402,11 @@ def imagedata_to_coverage_input(
         band_descriptions: Per-band descriptions.
         band_units: Per-band UCUM unit codes.
         crs: CRS overriding ``img.crs``.
-        geometry: Source geometry for non-grid domains.
-        timestamps: ISO 8601 / RFC 3339 timestamps for temporal data.
         collection_id: Identifier of the source collection, if any.
         item_ids: Identifiers of the source items, if any.
 
     Returns:
-        CoverageInput: The intermediate representation of the image.
+        GridInput: The intermediate representation of the image.
 
     Raises:
         ValueError: If the image has no bounds; if no CRS is available from
@@ -474,13 +462,11 @@ def imagedata_to_coverage_input(
 
     left, bottom, right, top = img.bounds
 
-    return CoverageInput(
+    return GridInput(
         data=img.array,
         bounds=(left, bottom, right, top),
         crs=resolved_crs,
-        geometry=geometry,
         bands=_resolve_bands(img, bands, band_names, band_descriptions, band_units),
-        timestamps=tuple(timestamps) if timestamps is not None else None,
         collection_id=collection_id,
         item_ids=tuple(item_ids) if item_ids is not None else None,
     )
