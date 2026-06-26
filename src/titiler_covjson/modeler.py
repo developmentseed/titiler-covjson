@@ -10,7 +10,13 @@ be tested from plain numpy arrays.
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
+
+if sys.version_info >= (3, 11):  # pragma: no cover
+    from typing import assert_never
+else:  # pragma: no cover
+    from typing_extensions import assert_never
 
 from covjson_pydantic.coverage import Coverage
 from covjson_pydantic.domain import Axes, CompactAxis, Domain, DomainType
@@ -22,6 +28,7 @@ from titiler_covjson.helpers import (
     create_unit,
     numpy_dtype_to_ndarray,
 )
+from titiler_covjson.input import GridInput
 
 if TYPE_CHECKING:
     from covjson_pydantic.ndarray import (
@@ -46,8 +53,9 @@ _GRID_AXIS_NAMES = ("y", "x")
 def to_coverage(coverage_input: CoverageInput) -> Coverage:
     """Convert a :class:`CoverageInput` to a CovJSON ``Coverage``.
 
-    Currently handles the Grid domain (gridded rasters, ``geometry is None``).
-    Other domain types are added in later stories.
+    Dispatches on the concrete input variant via ``match``; currently only
+    :class:`~titiler_covjson.input.GridInput` is handled. Point and
+    PointSeries variants are added in later stories.
 
     Args:
         coverage_input: The intermediate representation to convert.
@@ -55,16 +63,12 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
     Returns:
         Coverage: A covjson-pydantic ``Coverage`` model.
 
-    Raises:
-        NotImplementedError: If the input describes a non-grid domain, or holds
-            data that is not 3-D ``(bands, height, width)``.
-
     Examples:
         >>> import numpy as np
         >>> import rasterio
-        >>> from titiler_covjson.input import BandInfo, CoverageInput
+        >>> from titiler_covjson.input import BandInfo, GridInput
         >>> cov = to_coverage(
-        ...     CoverageInput(
+        ...     GridInput(
         ...         data=np.ma.MaskedArray(
         ...             np.array([[[1.0, 2.0], [3.0, 4.0]]], dtype="float32")
         ...         ),
@@ -96,28 +100,15 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
         >>> cov.ranges["temp"].values
         [1.0, 2.0, 3.0, 4.0]
     """
-    if coverage_input.geometry is not None:
-        msg = (
-            "Only gridded inputs (geometry=None) are supported so far; "
-            f"got geometry {coverage_input.geometry.geom_type!r}"
-        )
-        raise NotImplementedError(msg)
-
-    # CoverageInput also permits 2-D data (the future point/profile path); the
-    # grid conversion below assumes 3-D (bands, height, width), so reject 2-D
-    # here rather than emit a domain/range shape mismatch.
-    if coverage_input.data.ndim != 3:
-        msg = (
-            "Grid coverages require 3-D data with shape (bands, height, width); "
-            f"got {coverage_input.data.ndim} dimension(s)"
-        )
-        raise NotImplementedError(msg)
-
-    return Coverage(
-        domain=_create_grid_domain(coverage_input),
-        parameters=_create_parameters(coverage_input),
-        ranges=_create_grid_ranges(coverage_input),
-    )
+    match coverage_input:
+        case GridInput():
+            return Coverage(
+                domain=_create_grid_domain(coverage_input),
+                parameters=_create_parameters(coverage_input),
+                ranges=_create_grid_ranges(coverage_input),
+            )
+        case _:  # pragma: no cover
+            assert_never(coverage_input)
 
 
 def _compact_axis(first: float, last: float, num: int) -> CompactAxis:
@@ -142,7 +133,7 @@ def _compact_axis(first: float, last: float, num: int) -> CompactAxis:
     return CompactAxis(start=first + half_cell, stop=last - half_cell, num=num)
 
 
-def _create_grid_domain(coverage_input: CoverageInput) -> Domain:
+def _create_grid_domain(coverage_input: GridInput) -> Domain:
     """Build the Grid ``Domain`` (x/y CompactAxes plus spatial referencing).
 
     Args:
@@ -205,7 +196,7 @@ def _create_parameter(band: BandInfo) -> Parameter:
     )
 
 
-def _create_grid_ranges(coverage_input: CoverageInput) -> dict[str, RangeValue]:
+def _create_grid_ranges(coverage_input: GridInput) -> dict[str, RangeValue]:
     """Build one range ``NdArray`` per band, keyed to match the parameters.
 
     Args:

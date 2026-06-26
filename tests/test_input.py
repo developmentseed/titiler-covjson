@@ -1,4 +1,4 @@
-"""Tests for the CoverageInput intermediate representation."""
+"""Tests for the input layer: the CoverageInput variants and converters."""
 
 from __future__ import annotations
 
@@ -9,11 +9,10 @@ import numpy as np
 import pytest
 import rasterio
 from rio_tiler.models import ImageData, Info
-from shapely.geometry import Point
 
 from titiler_covjson.input import (
     BandInfo,
-    CoverageInput,
+    GridInput,
     band_info_from_reader_info,
     imagedata_to_coverage_input,
 )
@@ -44,16 +43,16 @@ def make_image(
     return ImageData(array, **kwargs)
 
 
-def masked_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> CoverageInput:
-    """Build a minimal CoverageInput around the given array.
+def masked_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> GridInput:
+    """Build a minimal GridInput around the given array.
 
     Args:
-        data: The masked data array.
+        data: The masked data array, shaped ``(bands, height, width)``.
 
     Returns:
-        CoverageInput: An input with default bounds and CRS.
+        GridInput: An input with default bounds and CRS.
     """
-    return CoverageInput(data=data, bounds=BOUNDS, crs=CRS)
+    return GridInput(data=data, bounds=BOUNDS, crs=CRS)
 
 
 class TestBandInfo:
@@ -76,8 +75,8 @@ class TestBandInfo:
             band.name = "b2"  # type: ignore[misc]
 
 
-class TestCoverageInput:
-    """Test the CoverageInput dataclass."""
+class TestGridInput:
+    """Test the GridInput dataclass."""
 
     def test_minimal_construction(self) -> None:
         """A 3-D masked array with bounds and CRS is sufficient."""
@@ -85,33 +84,21 @@ class TestCoverageInput:
 
         # bands is resolved at construction, so it is never empty afterwards.
         assert [band.name for band in cov.bands] == ["b1"]
-        assert cov.geometry is None
-        assert cov.timestamps is None
         assert cov.collection_id is None
         assert cov.item_ids is None
 
-    def test_2d_point_shape_accepted(self) -> None:
-        """Point/profile data shaped (bands, n) is valid."""
-        cov = masked_input(np.ma.MaskedArray(np.zeros((2, 5))))
-
-        assert cov.data.shape == (2, 5)
-
-    @pytest.mark.parametrize("shape", [(4,), (1, 2, 2, 2)], ids=("1D", "4D"))
-    def test_bad_dimensionality_raises(self, shape: tuple[int, ...]) -> None:
-        """1-D and 4-D data are rejected."""
-        with pytest.raises(ValueError, match="must have shape"):
-            masked_input(np.ma.MaskedArray(np.zeros(shape)))
-
-    @pytest.mark.parametrize("shape", [(0, 2), (0, 2, 2)], ids=("2D", "3D"))
-    def test_zero_bands_raises(self, shape: tuple[int, ...]) -> None:
-        """2-D or 3-D data are rejected when there are no (empty) bands."""
-        with pytest.raises(ValueError, match="must have shape"):
+    @pytest.mark.parametrize(
+        "shape", [(4,), (2, 5), (1, 2, 2, 2)], ids=("1D", "2D", "4D")
+    )
+    def test_non_3d_data_raises(self, shape: tuple[int, ...]) -> None:
+        """GridInput requires 3-D (bands, height, width) data."""
+        with pytest.raises(ValueError, match="Grid data must have shape"):
             masked_input(np.ma.MaskedArray(np.zeros(shape)))
 
     def test_band_count_mismatch_raises(self) -> None:
         """A non-empty bands tuple must match data.shape[0]."""
         with pytest.raises(ValueError, match="does not match"):
-            CoverageInput(
+            GridInput(
                 data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
                 bounds=BOUNDS,
                 crs=CRS,
@@ -120,7 +107,7 @@ class TestCoverageInput:
 
     def test_band_count_match_passes(self) -> None:
         """A bands tuple with one entry per band is accepted."""
-        cov = CoverageInput(
+        cov = GridInput(
             data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
             bounds=BOUNDS,
             crs=CRS,
@@ -129,60 +116,24 @@ class TestCoverageInput:
 
         assert [band.name for band in cov.bands] == ["b1", "b2"]
 
-    def test_2d_timestamps_match_passes(self) -> None:
-        """2-D data with one timestamp per sample is accepted."""
-        cov = CoverageInput(
-            data=np.ma.MaskedArray(np.zeros((1, 3))),
-            bounds=BOUNDS,
-            crs=CRS,
-            timestamps=("t0", "t1", "t2"),
-        )
-
-        assert cov.timestamps == ("t0", "t1", "t2")
-
-    def test_2d_timestamps_mismatch_raises(self) -> None:
-        """2-D data with the wrong number of timestamps is rejected early."""
-        with pytest.raises(ValueError, match="Number of timestamps"):
-            CoverageInput(
-                data=np.ma.MaskedArray(np.zeros((1, 3))),
-                bounds=BOUNDS,
-                crs=CRS,
-                timestamps=("t0", "t1"),
-            )
-
-    def test_3d_timestamps_not_checked(self) -> None:
-        """For 3-D data the time axis is domain-dependent, so it is deferred.
-
-        A timestamp count unrelated to any axis length passes ``__post_init__``
-        (the modeler validates 3-D+ timestamp/shape consistency, not this).
-        """
-        cov = CoverageInput(
-            data=np.ma.MaskedArray(np.zeros((1, 2, 2))),
-            bounds=BOUNDS,
-            crs=CRS,
-            timestamps=("t0", "t1", "t2", "t3", "t4"),
-        )
-
-        assert len(cov.timestamps or ()) == 5
-
     def test_duplicate_band_names_raises(self) -> None:
         """Band names become CovJSON keys, so they must be unique."""
         with pytest.raises(ValueError, match="unique"):
-            CoverageInput(
+            GridInput(
                 data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
                 bounds=BOUNDS,
                 crs=CRS,
                 bands=(BandInfo("x"), BandInfo("x")),
             )
 
-    @pytest.mark.parametrize("shape", [(1, 0, 2), (1, 2, 0), (2, 0)])
+    @pytest.mark.parametrize("shape", [(0, 2, 2), (1, 0, 2), (1, 2, 0)])
     def test_empty_data_axis_raises(self, shape: tuple[int, ...]) -> None:
-        """A zero-size data axis (e.g., an empty raster) is rejected early."""
+        """A zero-size data axis (including zero bands) is rejected early."""
         with pytest.raises(ValueError, match="non-empty"):
             masked_input(np.ma.MaskedArray(np.zeros(shape)))
 
     def test_frozen(self) -> None:
-        """CoverageInput is immutable."""
+        """GridInput is immutable."""
         cov = masked_input(np.ma.MaskedArray(np.zeros((1, 2, 2))))
 
         with pytest.raises(dataclasses.FrozenInstanceError):
@@ -190,12 +141,12 @@ class TestCoverageInput:
 
 
 class TestBandSynthesis:
-    """Test construction-time resolution of CoverageInput.bands."""
+    """Test construction-time resolution of GridInput.bands."""
 
     def test_supplied_bands_kept_unchanged(self) -> None:
         """When bands are supplied, they are stored as-is (no synthesis)."""
         bands = (BandInfo("red"), BandInfo("nir"))
-        cov = CoverageInput(
+        cov = GridInput(
             data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
             bounds=BOUNDS,
             crs=CRS,
@@ -317,7 +268,7 @@ class TestImagedataToCoverageInput:
             )
 
     def test_bands_kwarg_wrong_length_raises(self) -> None:
-        """A bands list of the wrong length fails CoverageInput validation."""
+        """A bands list of the wrong length fails GridInput validation."""
         with pytest.raises(ValueError, match="does not match"):
             imagedata_to_coverage_input(make_image(), bands=[BandInfo("a")])
 
@@ -338,20 +289,14 @@ class TestImagedataToCoverageInput:
         with pytest.raises(ValueError, match="no bounds"):
             imagedata_to_coverage_input(make_image(bounds=None))
 
-    def test_passthrough_fields(self) -> None:
-        """geometry, timestamps, collection_id, and item_ids carry over."""
-        geometry = Point(1.0, 2.0)
-        timestamps = ["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"]
+    def test_passthrough_provenance_fields(self) -> None:
+        """collection_id and item_ids carry over to the GridInput."""
         cov = imagedata_to_coverage_input(
             make_image(),
-            geometry=geometry,
-            timestamps=timestamps,
             collection_id="my-collection",
             item_ids=["item-1", "item-2"],
         )
 
-        assert cov.geometry is geometry
-        assert cov.timestamps == tuple(timestamps)
         assert cov.collection_id == "my-collection"
         assert cov.item_ids == ("item-1", "item-2")
 

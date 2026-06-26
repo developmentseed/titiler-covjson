@@ -2242,6 +2242,7 @@ dependencies = [
     { name = "rio-tiler" },
     { name = "shapely" },
     { name = "titiler-core" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
     { name = "ucumvert", version = "0.2.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ucumvert", version = "0.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -2271,6 +2272,7 @@ requires-dist = [
     { name = "rio-tiler", specifier = ">=7.9.6,<8.0" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "titiler-core", specifier = ">=0.18.0,<1.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.1" },
     { name = "ucumvert", specifier = ">=0.2.2" },
 ]
 

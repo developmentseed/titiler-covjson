@@ -13,9 +13,8 @@ from covjson_pydantic.coverage import Coverage
 from covjson_pydantic.domain import CompactAxis, DomainType
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.unit import Symbol
-from shapely.geometry import Point
 
-from titiler_covjson.input import BandInfo, CoverageInput
+from titiler_covjson.input import BandInfo, GridInput
 from titiler_covjson.modeler import to_coverage
 
 
@@ -56,18 +55,18 @@ def _grid_input(
     *,
     bands: tuple[BandInfo, ...] = (),
     crs: rasterio.CRS | None = None,
-) -> CoverageInput:
-    """Build a gridded CoverageInput (geometry=None) for modeler tests.
+) -> GridInput:
+    """Build a gridded GridInput for modeler tests.
 
     Args:
         data: The masked data array, shaped ``(bands, height, width)``.
-        bands: Per-band metadata; empty to let CoverageInput synthesize it.
+        bands: Per-band metadata; empty to let GridInput synthesize it.
         crs: CRS for the input; defaults to EPSG:4326 (WGS84).
 
     Returns:
-        CoverageInput: A gridded input over a fixed WGS84 bbox.
+        GridInput: A gridded input over a fixed WGS84 bbox.
     """
-    return CoverageInput(
+    return GridInput(
         data=data,
         bounds=(-10.0, -5.0, 10.0, 5.0),
         crs=crs or rasterio.CRS.from_epsg(4326),
@@ -242,31 +241,3 @@ class TestGridCoverage:
         assert system.type == "ProjectedCRS"
         assert system.id == "http://www.opengis.net/def/crs/EPSG/0/32637"
         assert_schema_valid(cov)
-
-    def test_non_grid_geometry_not_yet_supported(self) -> None:
-        """A non-None geometry raises NotImplementedError (grid-only so far)."""
-        data = _masked([[1.0]], dtype="float32")
-        coverage_input = CoverageInput(
-            data=data,
-            bounds=(0.0, 0.0, 0.0, 0.0),
-            crs=rasterio.CRS.from_epsg(4326),
-            geometry=Point(0.0, 0.0),
-        )
-        with pytest.raises(NotImplementedError, match="gridded inputs"):
-            to_coverage(coverage_input)
-
-    def test_two_dimensional_grid_input_not_supported(self) -> None:
-        """2-D data with no geometry raises rather than emitting a malformed grid.
-
-        The Grid path requires 3-D ``(bands, height, width)`` data;
-        :class:`CoverageInput` permits 2-D data (for the future point/profile
-        path), so guard against it reaching the grid conversion.
-        """
-        data = _masked([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
-        coverage_input = CoverageInput(
-            data=data,
-            bounds=(-10.0, -5.0, 10.0, 5.0),
-            crs=rasterio.CRS.from_epsg(4326),
-        )
-        with pytest.raises(NotImplementedError, match="3-D"):
-            to_coverage(coverage_input)
