@@ -169,8 +169,8 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
 
 **Current status (Grid only).** The per-domain input union (Section 7) has
 landed for the Grid variant (#22): `to_coverage` dispatches on the variant via
-`match` with `assert_never` (version-guarded: stdlib on Python 3.11+,
-`typing_extensions` on 3.10), and `GridInput` enforces its own 3-D shape
+`match` with `assert_never` (from the standard library `typing`), and
+`GridInput` enforces its own 3-D shape
 contract at construction, so the old `geometry`/`ndim` `NotImplementedError`
 guards are gone. Point and PointSeries variants follow in #23, and
 `to_coverage_collection` in #24; until #23, the alias `CoverageInput =
@@ -463,7 +463,7 @@ the modeler.
 exhaustiveness checking:
 
 ```python
-from typing import assert_never  # typing_extensions on Python < 3.11
+from typing import assert_never
 
 def to_coverage(coverage_input: CoverageInput) -> Coverage:
     match coverage_input:
@@ -505,8 +505,7 @@ The union is delivered in three stacked PRs under #18:
 
 - **#22 (this):** `_CoverageInputBase` + `GridInput`, `CoverageInput` as a
   one-member alias, `match` dispatch with `assert_never` exhaustiveness
-  (version-guarded: stdlib on Python 3.11+, `typing_extensions` on 3.10, declared
-  as a `python_version < "3.11"` conditional dependency), and
+  (from the standard library `typing`), and
   `imagedata_to_coverage_input()` returning `GridInput`. The converter's
   `geometry` and `timestamps` parameters are removed -- on the grid path a
   geometry only ever reached `NotImplementedError`, and timestamps would be a
