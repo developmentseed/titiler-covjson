@@ -4,7 +4,11 @@
 
 Accepted
 
-<!-- Or: Superseded by ADR-NNNN -->
+<!-- One of: Proposed, Accepted, Rejected, Deprecated, or Superseded by ADR-NNNN.
+Proposed = drafted and under review (e.g., in an open PR); Accepted = ratified and
+in force; Rejected = written up for the record but decided against; Deprecated = no
+longer relevant but not replaced by a specific successor; Superseded by ADR-NNNN =
+replaced by a later decision. -->
 
 ## Context
 
