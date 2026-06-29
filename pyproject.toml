@@ -5,7 +5,7 @@ description = "CoverageJSON output format and API extension for TiTiler"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Emmanuel Mathot", email = "emmanuel@developmentseed.org" },
     { name = "Chuck Daniels", email = "chuck@developmentseed.org" },
@@ -17,7 +17,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -25,13 +24,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "titiler.core>=0.18.0,<1.0",
-    "rio-tiler>=7.9.6,<8.0",
+    "titiler.core>=2.0,<3.0",
+    "rio-tiler>=9.0,<10.0",
     "covjson-pydantic>=0.8.0,<1.0",
     "shapely>=2.0",
     "numpy>=2.2.6",
     "ucumvert>=0.2.2",
-    "typing-extensions>=4.1 ; python_version < '3.11'",
 ]
 
 [project.urls]

@@ -10,13 +10,7 @@ be tested from plain numpy arrays.
 
 from __future__ import annotations
 
-import sys
-from typing import TYPE_CHECKING
-
-if sys.version_info >= (3, 11):  # pragma: no cover
-    from typing import assert_never
-else:  # pragma: no cover
-    from typing_extensions import assert_never
+from typing import TYPE_CHECKING, assert_never
 
 from covjson_pydantic.coverage import Coverage
 from covjson_pydantic.domain import Axes, CompactAxis, Domain, DomainType

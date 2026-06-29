@@ -26,17 +26,8 @@ def _masked(
 ) -> np.ma.MaskedArray[Any, np.dtype[Any]]:
     """Build a masked array for tests.
 
-    Centralizes a numpy-version workaround in one place. ``np.ma.array`` is typed
-    only for some argument forms in the oldest supported numpy (2.2.6, the floor
-    on Python 3.10); the dtype / ndarray / list-mask forms these tests need fall
-    through to an untyped overload, which strict mypy rejects as
-    ``no-untyped-call`` on 3.10. The newer numpy resolved on Python 3.11+ types
-    the call, so there the ignore would itself be unused -- the paired
-    ``unused-ignore`` code keeps the comment valid on both.
-
-    NOTE: when Python 3.10 support is dropped (and the numpy floor rises to a
-    version that types ``np.ma.array``), remove the ``# type: ignore`` below and,
-    if desired, inline this helper again.
+    Centralizes masked-array construction so the tests share one spelling of the
+    ``values`` / ``mask`` / ``dtype`` call.
 
     Args:
         values: Array values as a nested sequence or an ndarray.
@@ -46,8 +37,7 @@ def _masked(
     Returns:
         np.ma.MaskedArray[Any, np.dtype[Any]]: The masked array.
     """
-    # Drop this ignore when Python 3.10 support is dropped (see the NOTE above).
-    return np.ma.array(values, mask=mask, dtype=dtype)  # type: ignore[no-untyped-call, no-any-return, unused-ignore]
+    return np.ma.array(values, mask=mask, dtype=dtype)
 
 
 def _grid_input(
