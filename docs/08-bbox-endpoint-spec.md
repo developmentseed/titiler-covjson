@@ -114,14 +114,16 @@ inline in one JSON array, so output size is a first-class concern.
 - When the caller supplies no `width`, `height`, or `max_size`, a default
   `max_size` of **1024** (longest output dimension, preserving the bounds
   aspect ratio) is applied, so a full-extent read does not emit an unbounded
-  JSON document. This matches the 1024 default TiTiler uses for previews.
+  JSON document. This matches the 1024 default TiTiler uses for previews. The
+  default is itself a configurable factory setting.
 - `width` / `height` force exact output dimensions; when either is set,
   `max_size` does not apply (the `PartFeatureParams` rule).
 - A factory-configurable **hard ceiling** bounds the resulting grid cell count
   (`width * height`). A request whose resolved output grid would exceed the
   ceiling is rejected with `400` and a message naming the limit. The ceiling is
   enforced after the `width`/`height`/`max_size` resolution above, so it guards
-  explicit oversizing as well as large native reads.
+  explicit `width`/`height` oversizing (native reads are already bounded by the
+  `max_size` default).
 
 Reduced-resolution Grid output is thus first-class: a caller downsamples simply
 by constraining `max_size` (or `width`/`height`).
@@ -238,13 +240,26 @@ The body is a CovJSON Grid `Coverage`, built by the existing model layer
 
 | Code | Condition |
 | --- | --- |
-| `400` | Unsupported `f` value; bbox exceeds the hard cell-count ceiling; more than one of `parameter-name` / `bidx` / `expression`; invalid or unsupported CRS; degenerate bbox (`minx >= maxx` or `miny >= maxy`). |
-| `404` | `url` (or its asset) not found. |
-| `422` | Malformed path bbox (non-numeric segment) or other FastAPI / Pydantic validation failure. |
-| `500` | Unexpected internal processing error. |
+| `400` | Unsupported `f` value; bbox exceeds the hard cell-count ceiling; more than one of `parameter-name` / `bidx` / `expression`; a band index out of range; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`). |
+| `422` | Malformed path bbox (non-numeric segment), invalid or unsupported `crs`, or other FastAPI / Pydantic validation failure. |
+| `500` | Dataset open or read failure (e.g., an unreadable `url`), or an unexpected internal processing error. |
 
-Error bodies follow TiTiler's convention (a JSON object with a `detail`
-message).
+This single-dataset slice produces no `404`: a band the dataset lacks is either
+rejected as a `400` (out-of-range `bidx` / `parameter-name`) or surfaces as a
+`500` (a bad band reference inside an `expression`), and a missing `url` is a
+dataset read failure (`500`), not a not-found resource. The `crs` value is
+validated by a Pydantic `BeforeValidator`, so an invalid one is a `422`, not a
+`400`.
+
+The documented error bodies assume the host application installs TiTiler's
+exception handlers (`add_exception_handlers`), which render reader and dataset
+errors as a JSON `detail` response; without them, such errors surface as an
+unhandled `500` rather than the shape below.
+
+With those handlers in place, error bodies follow TiTiler's convention: a JSON
+object with a `detail` member. For application errors (`400` / `500`) `detail`
+is a message string; for FastAPI / Pydantic request-validation errors (`422`) it
+is an array of error objects (each with `loc`, `msg`, and `type`).
 
 ## 11. Acceptance
 
