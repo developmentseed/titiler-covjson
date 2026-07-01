@@ -30,6 +30,9 @@ dependencies = [
     "shapely>=2.0",
     "numpy>=2.4.6",
     "ucumvert>=0.2.2",
+    # CRS axis-order introspection (rasterio does not expose it); used to emit
+    # CovJSON referencing.coordinates in the CRS's declared axis order.
+    "pyproj>=3.0,<4.0",
 ]
 
 [project.urls]

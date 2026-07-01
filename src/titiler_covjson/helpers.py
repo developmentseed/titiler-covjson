@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyproj
 import rasterio
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.reference_system import (
@@ -74,6 +75,14 @@ _UCUM_CODE_TO_UNIT: dict[str, Unit] = {
 def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionObject:
     """Create a 2-D spatial reference system connection object.
 
+    CovJSON lists ``referencing.coordinates`` in the CRS's declared axis order.
+    This project always emits ``x`` as easting/longitude and ``y`` as
+    northing/latitude (GDAL's traditional axis order), so a CRS whose first
+    declared axis is latitude/northing (e.g., ``EPSG:4326``) yields
+    ``["y", "x"]``, while a longitude/easting-first CRS (``CRS84``, projected
+    CRSs) yields ``["x", "y"]``. Only this metadata differs; the axis values are
+    unchanged.
+
     Args:
         crs: A rasterio CRS instance.
 
@@ -82,7 +91,7 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
             for the given CRS.
 
     Examples:
-        Create a reference for a Geographic CRS:
+        A longitude/latitude geographic CRS (``CRS84``) keeps ``["x", "y"]``:
 
         >>> ref = create_spatial_2d_reference(rasterio.CRS.from_string("OGC:CRS84"))
         >>> ref.coordinates
@@ -92,7 +101,16 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
         >>> ref.system.id
         'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
 
-        Create a reference for a Projected CRS:
+        A latitude/longitude geographic CRS (``EPSG:4326``) is ``["y", "x"]`` to
+        match its authority axis order:
+
+        >>> ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(4326))
+        >>> ref.coordinates
+        ['y', 'x']
+        >>> ref.system.id
+        'http://www.opengis.net/def/crs/EPSG/0/4326'
+
+        A projected CRS (easting/northing) keeps ``["x", "y"]``:
 
         >>> ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(32637))
         >>> ref.coordinates
@@ -102,8 +120,17 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
         >>> ref.system.id
         'http://www.opengis.net/def/crs/EPSG/0/32637'
     """
+
+    # Read the CRS's declared axis order via pyproj (rasterio does not expose
+    # it). Go through WKT specifically: it preserves the authority axis order,
+    # whereas a proj4 representation would silently drop the axis order, always
+    # indicating lon/lat order.
+    axes = pyproj.CRS.from_wkt(crs.to_wkt()).axis_info
+    first_is_northing = axes[0].direction.lower() in ("north", "south")
+    coordinates = ["y", "x"] if first_is_northing else ["x", "y"]
+
     return ReferenceSystemConnectionObject(
-        coordinates=["x", "y"],
+        coordinates=coordinates,
         system=ReferenceSystem(
             type="GeographicCRS" if crs.is_geographic else "ProjectedCRS",
             id=crs_to_ogc_uri(crs),

@@ -1952,6 +1952,7 @@ source = { editable = "." }
 dependencies = [
     { name = "covjson-pydantic" },
     { name = "numpy" },
+    { name = "pyproj" },
     { name = "rio-tiler" },
     { name = "shapely" },
     { name = "titiler-core" },
@@ -1980,6 +1981,7 @@ docs = [
 requires-dist = [
     { name = "covjson-pydantic", specifier = ">=0.8.0,<1.0" },
     { name = "numpy", specifier = ">=2.4.6" },
+    { name = "pyproj", specifier = ">=3.0,<4.0" },
     { name = "rio-tiler", specifier = ">=9.0,<10.0" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "titiler-core", specifier = ">=2.0,<3.0" },
