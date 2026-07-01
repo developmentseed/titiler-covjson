@@ -1,5 +1,14 @@
 # titiler-covjson - Design Overview
 
+> **Superseded in direction.** The architecture below (CoverageInput -> modeler
+> -> covjson-pydantic) remains accurate, but the API direction predates
+> [ADR-0001](adr/0001-covjson-http-api-direction.md). The supported query
+> patterns in Section 3 (notably bbox `format=aggregated` and a separate
+> overview) are superseded: see ADR-0001 for the current direction (an OGC API -
+> Environmental Data Retrieval (EDR) aligned vocabulary on a dedicated
+> `BaseFactory` subclass) and [doc 08](08-bbox-endpoint-spec.md) for the first
+> endpoint specified under it.
+
 ## 1. Context & Motivation
 
 ### 1.1 Background

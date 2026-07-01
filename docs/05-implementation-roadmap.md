@@ -1,5 +1,16 @@
 # Implementation Roadmap (EPIC)
 
+> **Superseded in direction.** This roadmap predates
+> [ADR-0001](adr/0001-covjson-http-api-direction.md). The model-layer stories
+> (1-3) remain accurate, but the endpoint and integration stories below are
+> superseded by the ADR-0001 direction: a dedicated `titiler.core` `BaseFactory`
+> subclass (not the `FactoryExtension` of Story 11), an OGC API - Environmental
+> Data Retrieval (EDR) aligned `/bbox` -> Grid slice specified in
+> [doc 08](08-bbox-endpoint-spec.md) (replacing Story 5's `/covjson/bbox` with
+> `format=aggregated`), `/cube` deferred, and `max_size` downsampling subsuming
+> Story 10's `/overview`. The roadmap will be re-planned to that direction; it
+> is retained here for reference.
+
 ## EPIC: CoverageJSON Output Format for TiTiler
 
 ### Description
@@ -282,7 +293,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 ## Dependency Graph
 
-```plain
+```text
 Story 1 (covjson-pydantic + helpers) ──┐
                                         ├──> Story 3 (Modeler) ──┐
 Story 2 (CoverageInput)             ──┘                         │

@@ -1,5 +1,13 @@
 # CoverageJSON API Definition
 
+> **Superseded in direction.** This is the earlier bespoke API definition.
+> [ADR-0001](adr/0001-covjson-http-api-direction.md) supersedes its overall
+> direction (an OGC API - Environmental Data Retrieval (EDR) aligned vocabulary
+> on a dedicated `BaseFactory` subclass), and
+> [doc 08](08-bbox-endpoint-spec.md) supersedes its `/bbox` treatment. The
+> remaining endpoints below (point, transect, time series, tile, info) have not
+> yet been redesigned under that direction and are retained here for reference.
+
 ## 1. API Design Principles
 
 - **TiTiler Extension**: Implemented as a FastAPI router extension to TiTiler, not a standalone service

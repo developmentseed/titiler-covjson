@@ -4,13 +4,13 @@
 
 The **Modeler** is the layer that converts raster data (rio-tiler ImageData, numpy arrays, STAC metadata) into CovJSON model objects (via covjson-pydantic). It follows a clean separation of concerns:
 
-```plain
+```text
 rio-tiler data  -->  CoverageInput (intermediate)  -->  modeler (to_coverage)  -->  covjson-pydantic Coverage
 ```
 
 ## 2. Conversion Flow
 
-```plain
+```text
 CoverageInput
     |
     +---> _get_domain_type()     # geometry/data shape -> DomainType enum
