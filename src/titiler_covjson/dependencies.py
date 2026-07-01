@@ -1,8 +1,8 @@
 """Endpoint dependencies specific to the CoverageJSON factory.
 
 These layer the OGC API - Environmental Data Retrieval (EDR) ``parameter-name``
-vocabulary on top of the ``titiler.core`` dependency-injectors that the factory
-otherwise reuses unchanged.
+vocabulary and a CoverageJSON format guard on top of the ``titiler.core``
+dependency-injectors that the factory otherwise reuses unchanged.
 """
 
 from __future__ import annotations
@@ -131,9 +131,10 @@ def to_kwargs(dep: object) -> dict[str, Any]:
     """Convert a dependency dataclass's non-``None`` fields to a shallow dict.
 
     This is the free-function equivalent of ``titiler.core``'s
-    ``DefaultDependency.as_dict``: it collects the set (non-``None``) fields of a
-    request-dependency dataclass so they can be splatted straight into a
-    rio-tiler reader call, e.g., ``Reader.part(**to_kwargs(params))``. Values are
+    ``DefaultDependency.as_dict()`` in its default (``exclude_none=True``) form:
+    it collects the set (non-``None``) fields of a request-dependency dataclass
+    so they can be splatted straight into a rio-tiler reader call, e.g.,
+    ``Reader.part(**to_kwargs(params))``. Values are
     copied shallowly (by reference), so reader-bound objects such as resampling
     enums pass through unchanged. It works on any dependency dataclass (our own
     :class:`CovJSONBandParams` and titiler's ``PartFeatureParams`` /
@@ -168,6 +169,50 @@ def to_kwargs(dep: object) -> dict[str, Any]:
         {}
     """
     return {key: value for key, value in vars(dep).items() if value is not None}
+
+
+def validate_covjson_format(
+    f: Annotated[
+        str | None,
+        Query(description="Output format. Only 'CoverageJSON' is supported."),
+    ] = None,
+) -> None:
+    """Validate the ``f`` output-format selector for the CoverageJSON endpoint.
+
+    Only ``CoverageJSON`` (case-insensitive) is produced, so an absent or empty
+    ``f`` defaults to it and any other explicit value is rejected. This runs as a
+    FastAPI dependency for its side effect alone (it returns nothing): the host
+    application's titiler exception handlers render the raised error as a 400
+    response.
+
+    Args:
+        f: The requested output format, or ``None`` when unspecified.
+
+    Raises:
+        BadRequestError: If ``f`` is a non-empty value other than
+            ``CoverageJSON`` (case-insensitive).
+
+    Examples:
+        An absent, empty, or ``CoverageJSON`` value is accepted (the validator
+        returns ``None``):
+
+        >>> validate_covjson_format() is None
+        True
+        >>> validate_covjson_format("") is None
+        True
+        >>> validate_covjson_format("coveragejson") is None
+        True
+
+        Any other format is rejected:
+
+        >>> validate_covjson_format("png")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Unsupported format 'png': ...
+    """
+    if f and f.casefold() != "coveragejson":
+        msg = f"Unsupported format {f!r}: only 'CoverageJSON' is supported."
+        raise BadRequestError(msg)
 
 
 def _band_name_to_index(name: str) -> int:
