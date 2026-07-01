@@ -124,6 +124,45 @@ represent nodata and serialize as JSON `null`.
   one that takes a `flag=True/False` (or a mode string) that changes what it
   does.
 
+## Dependency injection (FastAPI `Depends`)
+
+FastAPI's `Depends` is a good tool for request-boundary plumbing and a poor
+general dependency-injection container: dependencies are declared inline with no
+composition root, so deep graphs are hard to trace, and the only native
+substitution seam (`app.dependency_overrides`) is a global, identity-keyed dict.
+We therefore treat the `titiler.core` `BaseFactory` subclass as the composition
+root: its fields are where collaborators are wired and where tests inject
+substitutes, and `Depends` is reserved for leaf request concerns.
+
+- Use `Depends` only for request-boundary concerns: parsing and validating
+  query/path/header parameters, auth, and request-scoped resources (with `yield`
+  for teardown). Do not wrap first-party computation in `Depends`; the route
+  handler calls pure functions directly for that.
+- Wire collaborators (the reader, configuration, and the dependency callables
+  themselves) through factory constructor fields, not nested `Depends`. The
+  factory is both the composition root (read its fields to see what an endpoint
+  needs) and the test seam (construct it with substitutes). Prefer this to
+  `app.dependency_overrides`; use overrides only when no constructor field
+  exists, and always reset them in a fixture.
+- Keep the dependency graph shallow: a first-party dependency must not depend on
+  another first-party dependency (no nesting of our own dependencies), so an
+  endpoint's request inputs stay legible at the handler signature. Depending on
+  titiler-provided dependencies is fine.
+- Keep dependencies thin and logic pure: a dependency only parses, validates, or
+  adapts; any non-trivial rule lives in a pure function it calls, testable
+  without an app and free of FastAPI (the functional-core/imperative-shell rule
+  under Code style, applied to the dependency-injection seam).
+- Dependencies are module-level named callables (functions or classes), never
+  lambdas or local closures, so they are importable, type-checked, callable
+  directly in tests (e.g., `validate_covjson_format("png")`), and overridable by
+  identity if ever needed.
+- Confine `fastapi` imports (`Depends`, `Query`, framework exceptions) to the
+  shell modules (`dependencies.py`, `factory.py`, and routes); the core
+  (`input`, `modeler`, `helpers`) never imports FastAPI.
+- A dependency returns plain data or nothing: a params dataclass or a kwargs
+  dict, or `None` for a pure validator. It never returns a framework object the
+  handler must interpret.
+
 ## Testing conventions
 
 - `tests/conftest.py` provides `validate_covjson` / `assert_schema_valid`, which
