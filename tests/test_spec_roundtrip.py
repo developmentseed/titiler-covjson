@@ -343,6 +343,9 @@ class TestSection951GeographicCRS:
         ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(4326))
         assert ref.system.type == "GeographicCRS"
         assert ref.system.id == "http://www.opengis.net/def/crs/EPSG/0/4326"
+        # EPSG:4326's authority axis order is latitude, longitude, so the
+        # coordinates list is ["y", "x"] (x holds longitude, y holds latitude).
+        assert ref.coordinates == ["y", "x"]
 
     def test_helper_geographic_crs84_roundtrip_stable(self) -> None:
         """create_spatial_2d_reference(CRS84) output round-trips to identical JSON."""
