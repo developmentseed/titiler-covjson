@@ -85,13 +85,19 @@ This slice adopts EDR's single-knob model:
 - `crs` interprets the path bbox coordinates **and** is the CRS the returned
   Grid coverage is expressed in. Internally it feeds both rio-tiler's
   `bounds_crs` (input) and `dst_crs` (output).
-- The default is **CRS84**. This is both what TiTiler's own `part` endpoint
-  already defaults to (rio-tiler's `Reader.part` sets `dst_crs = bounds_crs`,
-  and TiTiler defaults `bounds_crs` to WGS84) and what CovJSON consumers
-  overwhelmingly expect (geographic longitude/latitude). TiTiler's WGS84
-  default is the `epsg:4326` CRS, so the emitted referencing URI is
-  `http://www.opengis.net/def/crs/EPSG/0/4326` (as in the Section 9 example),
-  not the distinct CRS84 URI.
+- The default is **CRS84** (WGS84 with longitude/latitude axis order): this is
+  what EDR assumes for an absent `crs`, and what CovJSON consumers
+  overwhelmingly expect. It is emitted as the CRS84 referencing URI,
+  `http://www.opengis.net/def/crs/OGC/1.3/CRS84` (as in the Section 9 example).
+  The CRS84 URI is used deliberately in preference to the `epsg:4326` URI
+  (`http://www.opengis.net/def/crs/EPSG/0/4326`): although both denote WGS84,
+  the EPSG authority defines `EPSG:4326` with latitude/longitude axis order,
+  whereas this endpoint always emits `x` as longitude and `y` as latitude.
+  CRS84's longitude/latitude order matches that emission, so a strict CRS-aware
+  client reads the grid correctly; advertising `EPSG:4326` could invite it to
+  transpose the axes. An explicitly requested `crs` is emitted as its own OGC
+  authority URI (Section 9), so a caller who asks for `EPSG:4326` receives that
+  URI as-is.
 
 The output CRS is reflected in three places in the response (Section 9): the
 `domain.referencing` system identifier (an OGC CRS Uniform Resource Identifier
@@ -171,7 +177,7 @@ by `expression` have no source metadata.
   **`application/prs.coverage+json`** (the registered CovJSON MIME type), set by
   a dedicated response class.
 - A `Content-Crs` header carries the output CRS as an OGC CRS URI, e.g.,
-  `Content-Crs: <http://www.opengis.net/def/crs/EPSG/0/4326>`.
+  `Content-Crs: <http://www.opengis.net/def/crs/OGC/1.3/CRS84>`.
 
 ## 8. On `rescale` (intentional omission)
 
@@ -214,7 +220,7 @@ The body is a CovJSON Grid `Coverage`, built by the existing model layer
       "coordinates": ["x", "y"],
       "system": {
         "type": "GeographicCRS",
-        "id": "http://www.opengis.net/def/crs/EPSG/0/4326"
+        "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
       }
     }]
   },
