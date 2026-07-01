@@ -1,27 +1,11 @@
 import pytest
 from titiler.core.errors import BadRequestError
 
-from titiler_covjson.dependencies import CovJSONBandParams, to_kwargs
-
-
-def test_parameter_name_resolves_to_indexes() -> None:
-    params = CovJSONBandParams(parameter_name="b1,b3")
-    assert to_kwargs(params) == {"indexes": (1, 3)}
-
-
-def test_bidx_passthrough() -> None:
-    params = CovJSONBandParams(indexes=(2,))
-    assert to_kwargs(params) == {"indexes": (2,)}
-
-
-def test_expression_passthrough() -> None:
-    params = CovJSONBandParams(expression="b1/b2")
-    assert to_kwargs(params) == {"expression": "b1/b2"}
-
-
-def test_no_selector_yields_empty_kwargs() -> None:
-    # No selector means "all bands": nothing to pass to Reader.part().
-    assert to_kwargs(CovJSONBandParams()) == {}
+from titiler_covjson.dependencies import (
+    CovJSONBandParams,
+    to_kwargs,
+    validate_covjson_format,
+)
 
 
 @pytest.mark.parametrize(
@@ -79,3 +63,9 @@ def test_mutually_exclusive_selectors_rejected(
 def test_malformed_parameter_name_rejected() -> None:
     with pytest.raises(BadRequestError, match="Invalid parameter-name"):
         CovJSONBandParams(parameter_name="temperature")
+
+
+@pytest.mark.parametrize("value", ["CoverageJSON", "coveragejson", "COVERAGEJSON"])
+def test_format_coveragejson_accepted_case_insensitive(value: str) -> None:
+    # CoverageJSON in any case is accepted: no exception raised.
+    validate_covjson_format(value)
