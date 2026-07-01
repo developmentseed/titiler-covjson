@@ -79,16 +79,22 @@ select = [
     "B",
     "DOC",
     "E",
+    "EM",
     "F",
     "FURB",
     "I",
     "N",
     "NPY",
     "PERF",
+    "TID",
     "TRY",
     "UP",
     "W",
 ]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Convention: absolute imports only, never relative (see AGENTS.md Code style).
+ban-relative-imports = "all"
 
 [tool.mypy]
 files = ["src", "tests"]

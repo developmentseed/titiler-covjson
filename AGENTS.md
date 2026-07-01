@@ -51,6 +51,79 @@ represent nodata and serialize as JSON `null`.
 - `modeler.py`, `routes.py`, `router.py`: stubs; implementation roadmap is in
   `docs/05-implementation-roadmap.md`
 
+## Code style
+
+- Private function ordering: place module-private functions (those with a
+  leading underscore) at the **bottom** of the file, below the public surface
+  they support, so the public API a reader imports comes first. This applies to
+  both `src/` modules and test modules. Module-level constants may stay near the
+  imports at the top. `pytest` fixtures are named collaborators, not private
+  helpers: keep them in `tests/conftest.py` (or near the top of a test module
+  when genuinely module-local), not swept to the bottom.
+- Vertical spacing: surround block statements (`if` / `for` / `while` / `with` /
+  `try` / `match`) with blank lines, and precede a `return` statement with a
+  blank line. Both rules apply only relative to sibling statements at the **same
+  indentation level**: no leading blank when the statement is the first in its
+  enclosing block, and no trailing blank when it is the last. A statement
+  immediately following a function's docstring is treated as first in the block
+  (the docstring is header-like), so it takes no leading blank.
+- Imports: use absolute imports only (e.g., `from titiler_covjson.input import
+  CoverageInput`); never relative imports (`from .input import ...`). Enforced
+  by ruff (`TID`, `ban-relative-imports = "all"`).
+- Exception messages: assign the message to a local `msg` variable and
+  `raise SomeError(msg)`, rather than building the string inside the `raise`.
+  Enforced by ruff (`EM`, `TRY003`).
+- Prefer a functional style over an object-oriented one: reach for module-level
+  functions and plain data over classes, inheritance, and mutable state. When a
+  dependency is heavily object-oriented (FastAPI, the attrs-based titiler
+  factories), adopt its idioms where fighting them costs more than it saves
+  (e.g., subclassing `BaseFactory`), but keep our own logic in free functions
+  (e.g., the `to_kwargs` function instead of a `DefaultDependency.as_dict`
+  override).
+- Prefer implicit iteration (comprehensions, generator expressions, `map`,
+  `itertools.chain`) over explicit `for` / `while` loops, unless a loop is
+  genuinely clearer (side effects, early exit, or a comprehension that would be
+  hard to read).
+- Compose with the standard library (`itertools`, `functools`) where it
+  expresses intent, but do not fight the type checker to do so: `mypy` runs
+  strict here, so prefer the straightforward form over a clever composition that
+  needs casts or `type: ignore`.
+- A checker or transform helper returns an iterable (or a value) rather than
+  accepting and mutating a shared accumulator; callers combine the results
+  (e.g., with a comprehension or `itertools.chain`). Object lifecycle hooks that
+  must mutate their instance (e.g., a dataclass `__post_init__`) are exempt.
+- Build behavior from small, single-purpose, composable functions, and use
+  runnability as the granularity test: if a candidate helper cannot earn a real,
+  runnable example (typically a doctest), it is too small to extract; inline it
+  instead.
+- Keep a functional core and an imperative shell: put derivation and
+  transformation logic in pure functions whose result depends only on their
+  inputs (no I/O, global state, logging, or hidden mutation), and concentrate
+  side effects (dataset reads, time, randomness, building responses) in the thin
+  endpoint layer. This mirrors the existing split: the modeler purely transforms
+  a `CoverageInput`, while the reader and route are the shell.
+- Favor immutability: prefer immutable data for the values you pass and return
+  (tuples over lists, `frozenset`, a `NamedTuple` or a frozen dataclass); treat
+  function arguments as read-only and never mutate caller-owned data; and never
+  use a mutable default argument (use `field(default_factory=...)` or a `None`
+  sentinel). Initialization-time normalization in a lifecycle hook (a dataclass
+  `__post_init__`) and dataclasses a framework must populate (FastAPI
+  dependencies) are exempt, as with the rules above.
+- Prefer modeling expected failure as a value rather than an exception, where
+  that does not fight Python or its libraries: return `T | None` for a single
+  absent or failed case (as `helpers.create_unit` does), a small typed result (a
+  union, `NamedTuple`, or `Enum`) when callers must distinguish several outcomes
+  or need error detail, or a list of problems from a validator that checks many
+  things (so callers see them all at once, not just the first). Reserve `raise`
+  for genuinely exceptional conditions and for boundaries: FastAPI dependencies
+  and route handlers raise to hand control to titiler's error mapping (e.g.,
+  `BadRequestError` maps to 400). Do not thread a `Result` or `Either` type
+  through layers where Python and the libraries expect exceptions, and do not
+  use exceptions for ordinary control flow (both fight the language).
+- Avoid behavior-switching flag parameters: prefer two well-named functions over
+  one that takes a `flag=True/False` (or a mode string) that changes what it
+  does.
+
 ## Testing conventions
 
 - `tests/conftest.py` provides `validate_covjson` / `assert_schema_valid`, which
@@ -83,6 +156,15 @@ represent nodata and serialize as JSON `null`.
 - Fenced code blocks: always give the fence a language. When a block has no
   specific or obvious language (e.g., monospaced plain text or an ASCII
   diagram), mark it `text` rather than leaving the fence bare.
+- Docstrings are externally facing (they surface in `help()`, IDE tooltips, and
+  generated API documentation), and this includes module-level docstrings. Keep
+  every docstring self-contained: no references to internal repository artifacts
+  a reader outside the repo cannot resolve, e.g., "the endpoint spec",
+  "Section 6", "Finding 4", an ADR number, or a `docs/` filename. State the
+  behavior directly instead. Internal cross-references belong in code comments,
+  not docstrings, and must name a resolvable artifact (e.g.,
+  `docs/08-bbox-endpoint-spec.md` or `ADR-0001`), never a bare "the spec" or a
+  pointer into an uncommitted planning document.
 
 ## Architecture decisions (ADRs)
 
