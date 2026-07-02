@@ -33,7 +33,7 @@ Data flow (see `docs/01-design-overview.md` for the full design):
 ```text
 FastAPI endpoint → rio-tiler read (ImageData/PointData/...)
     → CoverageInput (src/titiler_covjson/input.py: neutral intermediate representation)
-    → RasterCovJSONModeler (src/titiler_covjson/modeler.py)
+    → to_coverage (src/titiler_covjson/modeler.py)
     → covjson-pydantic models (Coverage, Domain, Range, Parameter)
     → JSON response (application/prs.coverage+json)
 ```
@@ -48,8 +48,13 @@ represent nodata and serialize as JSON `null`.
   selection, UCUM unit lookup (via `ucumvert`)
 - `input.py`: `CoverageInput` / `BandInfo` dataclasses plus converters from
   rio-tiler results
-- `modeler.py`, `routes.py`, `router.py`: stubs; implementation roadmap is in
-  `docs/05-implementation-roadmap.md`
+- `modeler.py`: `to_coverage` and the helpers that build covjson-pydantic models
+  from a `CoverageInput` (Grid implemented; other domains follow)
+- `factory.py`: `CovJSONFactory(BaseFactory)`, owning the `/bbox` route and
+  wiring the reader through the model layer to a `CovJSONResponse`
+- `dependencies.py`: `CovJSONBandParams` (EDR `parameter-name` alias) and
+  `validate_covjson_format` (the `f` guard)
+- `responses.py`: `CovJSONResponse` + `COVJSON_MEDIA_TYPE`
 
 ## Code style
 
