@@ -55,6 +55,24 @@ def cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.fixture(scope="session")
+def wide_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Write an 1100x1100 COG (native resolution above the 1024 default cap).
+
+    Used to exercise the explicit-``max_size`` cell-count ceiling: a ``max_size``
+    at or above ``default_max_size`` on a source this large resolves to a grid
+    exceeding the default ``max_cells``, so it must be rejected before the read.
+    Session-scoped.
+
+    Returns:
+        str: Filesystem path to the written COG.
+    """
+    path = str(tmp_path_factory.mktemp("data") / "wide.tif")
+    _write_cog(path, width=1100, height=1100)
+
+    return path
+
+
+@pytest.fixture(scope="session")
 def tiny_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Write a 2x2 2-band EPSG:4326 raster with a nodata sentinel on band 2.
 

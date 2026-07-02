@@ -166,12 +166,13 @@ def test_bbox_rejects_oversized_explicit_grid(
     client: TestClient, cog_path: str
 ) -> None:
     # Both width and height explicit: the cell count is known pre-read and
-    # rejected before any array is allocated.
+    # rejected before any array is allocated ("Requested", not "Output").
     response = client.get(
         "/bbox/-10,-5,10,5",
         params={"url": cog_path, "width": 2000, "height": 2000},
     )
     assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
 
 
@@ -228,12 +229,13 @@ def test_bbox_lone_width_derived_grid_hits_ceiling(
 ) -> None:
     # A lone width still upsamples, so a huge one is rejected before the array is
     # read: the derived height is resolved pre-read and the cell count exceeds
-    # max_cells (the DoS the pre-read guard closes). The request must not hang or
-    # allocate; it returns 400 promptly.
+    # max_cells (the DoS the pre-read guard closes). Asserting "Requested"
+    # (the pre-read message, vs "Output" post-read) proves no array was allocated.
     response = client.get(
         "/bbox/-10,-5,10,5", params={"url": cog_path, "width": 100000}
     )
     assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
 
 
@@ -244,31 +246,87 @@ def test_bbox_lone_height_derived_grid_hits_ceiling(
         "/bbox/-10,-5,10,5", params={"url": cog_path, "height": 100000}
     )
     assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
 
 
+def test_bbox_huge_max_size_hits_ceiling_pre_read(
+    client: TestClient, wide_cog_path: str
+) -> None:
+    # max_size caps the longest output axis at min(max_size, native). On a source
+    # whose native resolution exceeds the default cap, a max_size at/above
+    # default_max_size resolves to a grid over the default max_cells -- and it is
+    # resolved pre-read, so it is rejected before allocation ("Requested"), not by
+    # the post-read backstop after a large read (the max_size DoS this closes).
+    response = client.get(
+        "/bbox/-10,-5,10,5", params={"url": wide_cog_path, "max_size": 1500}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+
+_FULL_BOUNDS = (-10.0, -5.0, 10.0, 5.0)  # 16x16 source -> square read window
+_TALL_BOUNDS = (-10.0, -5.0, 0.0, 5.0)  # narrow in x, full in y -> taller window
+
+
 @pytest.mark.parametrize(
-    ("read_epsg", "width", "height"),
-    [(4326, 40, None), (4326, None, 30), (3857, 40, None), (3857, None, 30)],
-    ids=["4326-w", "4326-h", "3857-w", "3857-h"],
+    ("bounds", "read_epsg", "width", "height", "max_size"),
+    [
+        (_FULL_BOUNDS, 4326, 40, None, None),
+        (_FULL_BOUNDS, 4326, None, 30, None),
+        (_FULL_BOUNDS, 3857, 40, None, None),
+        (_FULL_BOUNDS, 3857, None, 30, None),
+        (_FULL_BOUNDS, 4326, None, None, 8),
+        (_FULL_BOUNDS, 3857, None, None, 8),
+        (_FULL_BOUNDS, 4326, None, None, 5000),
+        (_FULL_BOUNDS, 4326, None, None, None),
+        (_TALL_BOUNDS, 4326, None, None, 10),
+    ],
+    ids=[
+        "4326-w",
+        "4326-h",
+        "3857-w",
+        "3857-h",
+        "4326-max_size",
+        "3857-max_size",
+        "max_size-clamps-to-native",
+        "native",
+        "max_size-tall-window",
+    ],
 )
 def test_resolve_grid_dimensions_matches_rio_tiler(
-    cog_path: str, read_epsg: int, width: int | None, height: int | None
+    cog_path: str,
+    bounds: tuple[float, float, float, float],
+    read_epsg: int,
+    width: int | None,
+    height: int | None,
+    max_size: int | None,
 ) -> None:
     # Lock-in: the pre-read dimension resolution must equal what Reader.part
-    # actually produces, both when the read reprojects (3857) and when it does
-    # not (4326). If it drifts, the cell-count ceiling would guard a different
-    # grid than the one allocated, silently reopening the lone-dimension DoS --
-    # so this fails loudly if rio-tiler ever changes its derivation.
-    bounds = (-10.0, -5.0, 10.0, 5.0)
+    # actually produces -- across reproject (3857) and non-reproject (4326)
+    # reads, a lone width/height, a max_size cap (wider and taller windows), a
+    # clamp-to-native, and a native read. If it drifts, the cell-count ceiling
+    # would guard a different grid than the one allocated, silently reopening the
+    # DoS -- so this fails loudly if rio-tiler ever changes its derivation.
     read_crs = rasterio.CRS.from_epsg(read_epsg)
 
     with Reader(cog_path) as src:
         predicted = _resolve_grid_dimensions(
-            src.dataset, bounds, read_crs=read_crs, width=width, height=height
+            src.dataset,
+            bounds,
+            read_crs=read_crs,
+            width=width,
+            height=height,
+            max_size=max_size,
         )
         image = src.part(
-            bounds, dst_crs=read_crs, bounds_crs=read_crs, width=width, height=height
+            bounds,
+            dst_crs=read_crs,
+            bounds_crs=read_crs,
+            width=width,
+            height=height,
+            max_size=max_size,
         )
 
     assert predicted == (image.width, image.height)
@@ -278,13 +336,13 @@ def test_bbox_rejects_oversized_output_grid(
     small_ceiling_client: TestClient, cog_path: str
 ) -> None:
     # max_size=8 -> an 8x8 = 64-cell output exceeds the factory's max_cells=16.
-    # This exercises the post-read backstop (max_size bounds the read, so the
-    # cell count is only known after reading), distinct from the pre-read guard
-    # on explicit width/height.
+    # The max_size output dimensions are resolved pre-read, so this is rejected
+    # before allocation ("Requested"), same as explicit width/height.
     response = small_ceiling_client.get(
         "/bbox/-10,-5,10,5", params={"url": cog_path, "max_size": 8}
     )
     assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
 
 

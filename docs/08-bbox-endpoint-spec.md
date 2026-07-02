@@ -124,20 +124,20 @@ inline in one JSON array, so output size is a first-class concern.
   aspect ratio) is applied, so a full-extent read does not emit an unbounded
   JSON document. This matches the 1024 default TiTiler uses for previews. The
   default is itself a configurable factory setting.
-- `width` and `height` force exact output dimensions and must be supplied
-  together (or not at all); when both are set, `max_size` does not apply (the
-  `PartFeatureParams` rule). A lone `width` or `height` is rejected with `400`:
-  rio-tiler would derive the missing dimension from the bounds aspect ratio and
-  upsample to the requested value while ignoring `max_size`, escaping both the
-  downsampling default and the pre-read cell ceiling (a denial-of-service
-  hazard). Requiring the pair keeps every sized request's cell count knowable
-  before the read.
+- `width` and `height` force exact output dimensions; when either is set,
+  `max_size` does not apply (the `PartFeatureParams` rule). Each must be
+  positive; a zero or negative value is rejected with `400`. A lone `width` or
+  `height` is honored: rio-tiler derives the missing dimension from the read
+  window's aspect ratio, and the resulting grid is resolved and checked against
+  the ceiling before the read (see below), so it cannot upsample into an
+  unbounded allocation.
 - A factory-configurable **hard ceiling** bounds the resulting grid cell count
-  (`width * height`). A request whose resolved output grid would exceed the
-  ceiling is rejected with `400` and a message naming the limit. The ceiling is
-  enforced after the `width`/`height`/`max_size` resolution above, so it guards
-  explicit `width`/`height` oversizing (native reads are already bounded by the
-  `max_size` default).
+  (`width * height`). Before reading, the exact output dimensions rio-tiler will
+  produce are resolved from the sizing parameters and the read window (whether
+  from explicit `width`/`height`, a derived lone dimension, or a `max_size`
+  cap), and a grid that would exceed the ceiling is rejected with `400` naming
+  the limit. Because every sizing path is resolved pre-read, no oversized array
+  is allocated; a post-read check remains as defense-in-depth.
 
 Reduced-resolution Grid output is thus first-class: a caller downsamples simply
 by constraining `max_size` (or `width`/`height`).

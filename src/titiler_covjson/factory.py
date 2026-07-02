@@ -210,21 +210,21 @@ def _read_bounded_image(
         info = src_dst.info()
         _validate_band_indexes(band_kwargs.get("indexes"), info)
 
-        # Reject an oversized grid before allocating the array, when the output
-        # dimensions are known pre-read (both requested, or one derived from the
-        # read window). A no-sizing request resolves to (None, None) and is left
-        # to the post-read backstop below.
+        # Resolve the exact output dimensions rio-tiler will produce (from the
+        # width/height/max_size sizing and the read window) and reject an
+        # oversized grid before the array is allocated. Opening the dataset only
+        # reads metadata, not pixels.
         grid_width, grid_height = _resolve_grid_dimensions(
             src_dst.dataset,
             bounds,
             read_crs=read_crs,
             width=image_params.width,
             height=image_params.height,
+            max_size=part_kwargs.get("max_size"),
         )
-        if grid_width is not None and grid_height is not None:
-            _enforce_cell_ceiling(
-                grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
-            )
+        _enforce_cell_ceiling(
+            grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
+        )
 
         image = src_dst.part(
             bounds,
@@ -235,7 +235,9 @@ def _read_bounded_image(
             **dataset_kwargs,
         )
 
-    # Backstop for the no-sizing path (bounded by max_size, not checked pre-read).
+    # Defense-in-depth backstop: the pre-read guard resolves the exact output
+    # dimensions, so this only bites if that resolution ever diverges from what
+    # part actually produced (a lock-in test guards against silent drift).
     _enforce_cell_ceiling(
         image.width, image.height, max_cells=max_cells, grid_label="Output"
     )
@@ -305,22 +307,22 @@ def _resolve_grid_dimensions(
     read_crs: rasterio.CRS,
     width: int | None,
     height: int | None,
-) -> tuple[int, int] | tuple[None, None]:
+    max_size: int | None,
+) -> tuple[int, int]:
     """Resolve the output grid dimensions rio-tiler's ``part`` will produce.
 
-    Both dimensions given: returned unchanged. Exactly one given: rio-tiler
-    derives the other from the read window's aspect ratio and *upsamples* to the
-    requested value, so the missing dimension is computed here the same way,
-    letting the resulting cell count be checked against a ceiling before the
-    array is read (a lone ``width`` or ``height`` otherwise escapes both the
-    ``max_size`` downsampling default and a both-dimensions cell check, a
-    denial-of-service hazard). Neither given: the output is bounded by the
-    ``max_size`` default, so ``(None, None)`` is returned and the count is left
-    to a post-read check.
+    Mirrors the dimension logic in ``rio_tiler.reader.part`` so the resulting
+    cell count can be checked against the ceiling before the array is read:
 
-    This mirrors the dimension derivation in ``rio_tiler.reader.part``; a test
-    locks the two in step, so a change to that derivation fails loudly rather
-    than silently defeating the cell-count check.
+    - both ``width`` and ``height`` given: returned unchanged (``part`` ignores
+      ``max_size`` then);
+    - exactly one given: the other is derived from the read window's aspect
+      ratio (``part`` upsamples the given dimension);
+    - neither given: ``max_size`` caps the longer axis of the read window, or,
+      when ``max_size`` is also ``None``, the native window is read.
+
+    A test locks this in step with ``part``, so a change to its derivation fails
+    loudly rather than silently defeating the cell-count ceiling.
 
     Args:
         dataset: The open rasterio dataset, for the read-window geometry.
@@ -329,38 +331,32 @@ def _resolve_grid_dimensions(
             in and that the read reprojects to.
         width: The requested output width, or ``None``.
         height: The requested output height, or ``None``.
+        max_size: The longest-output-dimension cap applied when neither width nor
+            height is given, or ``None`` to read the native window.
 
     Returns:
-        tuple[int, int] | tuple[None, None]: The resolved ``(width, height)``,
-            or ``(None, None)`` when neither was requested.
+        tuple[int, int]: The resolved ``(width, height)``.
 
     Examples:
-        Both dimensions given returns them unchanged, and neither given returns
-        ``(None, None)``. Both cases short-circuit before the read window is
-        consulted, so ``dataset`` and ``bounds`` are unused (hence the
-        placeholder values below):
+        Both dimensions given are returned unchanged; this is the only case that
+        short-circuits before the read window is consulted, so ``dataset`` and
+        ``bounds`` are unused (hence the placeholder values below):
 
         >>> _resolve_grid_dimensions(
-        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128
+        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
+        ...     max_size=None,
         ... )
         (256, 128)
-        >>> _resolve_grid_dimensions(
-        ...     None, (0, 0, 1, 1), read_crs=None, width=None, height=None
-        ... )
-        (None, None)
 
-        Only the lone-dimension case consults ``bounds``: the missing dimension
-        is derived from the read window's aspect ratio, so it needs an open
-        dataset and is not shown here.
+        Every other case (a lone dimension, or a ``max_size`` cap) is derived
+        from the read window, so it needs an open dataset and is not shown here.
     """
+
     if width is not None and height is not None:
         return width, height
 
-    if width is None and height is None:
-        return None, None
-
-    # Match part's read-window aspect ratio: the reprojected VRT grid when the
-    # read reprojects, else the native window over the source transform.
+    # Match part's read window: the reprojected VRT grid when the read
+    # reprojects, else the native window over the source transform.
     if read_crs != dataset.crs:
         _, window_width, window_height = get_vrt_transform(
             dataset, bounds, height, width, dst_crs=read_crs
@@ -369,15 +365,51 @@ def _resolve_grid_dimensions(
         window = windows.from_bounds(*bounds, transform=dataset.transform)
         window_width, window_height = window.width, window.height
 
-    ratio = window_height / window_width
-
     if width is not None:
-        return width, math.ceil(width * ratio)
+        return width, math.ceil(width * window_height / window_width)
 
-    # Exactly one dimension is set (guarded above) and it is not width, so height
-    # is set; mypy cannot see that correlation, hence the narrowing assert.
-    assert height is not None
-    return math.ceil(height / ratio), height
+    if height is not None:
+        return math.ceil(height * window_width / window_height), height
+
+    if max_size is None:
+        return max(1, round(window_width)), max(1, round(window_height))
+
+    return _scale_to_max_size(max_size, round(window_width), round(window_height))
+
+
+def _scale_to_max_size(
+    max_size: int, window_width: int, window_height: int
+) -> tuple[int, int]:
+    """Cap the longer window axis at ``max_size``, preserving the aspect ratio.
+
+    Replicates rio-tiler's ``max_size`` handling: when the window already fits,
+    it is returned unchanged, otherwise the longer axis is set to ``max_size``
+    and the shorter is scaled to match (rounding up). A test locks this in step
+    with ``rio_tiler.reader.part``, so a change to its behavior fails loudly.
+
+    Args:
+        max_size: The longest-output-dimension cap.
+        window_width: The read-window width in pixels.
+        window_height: The read-window height in pixels.
+
+    Returns:
+        tuple[int, int]: The resulting ``(width, height)``.
+
+    Examples:
+        >>> _scale_to_max_size(50, 80, 40)  # wider than tall, cap the width
+        (50, 25)
+        >>> _scale_to_max_size(50, 40, 80)  # taller than wide, cap the height
+        (25, 50)
+        >>> _scale_to_max_size(100, 40, 40)  # already within max_size
+        (40, 40)
+    """
+    if max(window_width, window_height) < max_size:
+        return window_width, window_height
+
+    if window_height > window_width:
+        return math.ceil(max_size * window_width / window_height), max_size
+
+    return max_size, math.ceil(max_size * window_height / window_width)
 
 
 def _validate_label_crs(crs: rasterio.CRS) -> None:
