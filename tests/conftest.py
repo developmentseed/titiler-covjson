@@ -91,6 +91,19 @@ def small_default_client() -> TestClient:
     return _make_client(default_max_size=4)
 
 
+@pytest.fixture
+def small_ceiling_client() -> TestClient:
+    """Return a TestClient over a factory with a tiny cell-count ceiling.
+
+    ``default_max_size`` is lowered in lock-step so the factory's
+    ``max_cells >= default_max_size ** 2`` construction invariant holds.
+
+    Returns:
+        TestClient: Client whose factory uses ``default_max_size=4, max_cells=16``.
+    """
+    return _make_client(default_max_size=4, max_cells=16)
+
+
 def validate_covjson(instance: dict[str, Any], definition: str | None = None) -> None:
     """Validate an instance against the CoverageJSON schema or a named definition.
 

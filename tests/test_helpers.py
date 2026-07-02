@@ -97,6 +97,27 @@ class TestNumpyDtypeToNdarray:
         assert nd.values == [10, None, 30]
         assert_schema_valid(nd, "ndArray")
 
+    def test_float_declared_over_integer_array(self) -> None:
+        """A float-declared band over integer data converts without crashing.
+
+        ``BandInfo.dtype`` defaults to ``float32`` while the underlying array
+        may be integer (the declared dtype is deliberately independent of the
+        array's own dtype), so the float branch must not assume a float array.
+        """
+        import math
+
+        arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.array(
+            [[1, 2], [3, 4]], dtype="int32", mask=[[True, False], [False, False]]
+        )
+        nd = numpy_dtype_to_ndarray(arr, np.float32, ["y", "x"])
+        assert isinstance(nd, NdArrayFloat)
+        assert nd.values is not None
+        masked = nd.values[0]
+        assert masked is not None
+        assert math.isnan(masked)  # the masked entry became NaN
+        assert nd.values[1:] == [2.0, 3.0, 4.0]
+        assert_schema_valid(nd, "ndArray")
+
     @pytest.mark.parametrize(
         "dtype",
         [np.float32, np.float64, np.int16, np.int32, np.uint8],
@@ -141,6 +162,7 @@ class TestNumpyToCovjsonDtype:
             (np.uint16, "integer"),
             (np.uint32, "integer"),
             (np.uint64, "integer"),
+            (np.bool_, "integer"),
             (np.dtype("U10"), "string"),
             (np.dtype("S10"), "string"),
             (np.dtype("O"), "string"),

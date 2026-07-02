@@ -67,5 +67,7 @@ def test_malformed_parameter_name_rejected() -> None:
 
 @pytest.mark.parametrize("value", ["CoverageJSON", "coveragejson", "COVERAGEJSON"])
 def test_format_coveragejson_accepted_case_insensitive(value: str) -> None:
-    # CoverageJSON in any case is accepted: no exception raised.
+    # CoverageJSON in any case is accepted: the validator returns None and does
+    # not raise. (Rejection of other values is covered by the dependencies.py
+    # doctest and the route test in test_factory.py.)
     validate_covjson_format(value)
