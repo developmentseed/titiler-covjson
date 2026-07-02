@@ -64,7 +64,7 @@ _UCUM_CODE_TO_UNIT: dict[str, Unit] = {
     "cm/a": _ucum_unit("centimeters per year", "cm/a"),
     # Radiation / energy flux
     "W/m2": _ucum_unit("watts per square meter", "W/m2"),
-    # Surface density (e.g. snow water equivalent, soil moisture)
+    # Surface density (e.g., snow water equivalent, soil moisture)
     "kg/m2": _ucum_unit("kilograms per square meter", "kg/m2"),
     # Dimensionless
     "%": _ucum_unit("percent", "%"),
@@ -212,7 +212,7 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
     """Convert a rasterio CRS object to an OGC URI reference.
 
     Args:
-        crs (rasterio.CRS): The coordinate reference system to convert.
+        crs: The coordinate reference system to convert.
 
     Returns:
         str: OGC URI string.
@@ -258,7 +258,7 @@ def numpy_dtype_to_ndarray(
     Args:
         data: A 1-D or 2-D masked numpy array for a single band.
         dtype: The declared band dtype, used to select the NdArray subclass.
-        axis_names: Ordered axis labels, e.g. ``["y", "x"]`` for a 2-D grid or
+        axis_names: Ordered axis labels, e.g., ``["y", "x"]`` for a 2-D grid or
             ``["values"]`` for a 1-D profile.
 
     Returns:
@@ -306,7 +306,7 @@ def numpy_to_covjson_dtype(dtype: npt.DTypeLike) -> str:
     """Convert a numpy dtype to a CoverageJSON dtype string.
 
     Args:
-        dtype (np.dtype): The numpy dtype to convert.
+        dtype: The numpy dtype to convert.
 
     Returns:
         str: CoverageJSON dtype string ("float", "integer", or "string").

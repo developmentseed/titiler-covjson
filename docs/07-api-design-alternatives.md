@@ -1,4 +1,4 @@
-# API Design Alternatives -- Analysis & Comparison
+# API Design Alternatives: Analysis & Comparison
 
 > **Status:** Draft for review. Purpose: give the original API designer a clear,
 > grounded comparison of the API-surface options for `titiler-covjson` so we can
@@ -69,7 +69,7 @@ existing surface.
 This document compares the three non-bespoke directions. The bespoke design is
 summarized only as a baseline for contrast (Section 4).
 
-## 2. Shared substrate -- what TiTiler already provides
+## 2. Shared substrate: what TiTiler already provides
 
 All three options build on the same substrate, stated once here.
 
@@ -150,7 +150,7 @@ routes and selects the format itself (Section 7.1, `f=CoverageJSON` or `Accept`)
 rather than through the image `.{format}` suffix. This rules out "just add
 `.covjson` to the existing image route for free."
 
-## 3. Shared reference -- what OGC API-EDR provides
+## 3. Shared reference: what OGC API-EDR provides
 
 CoverageJSON is a standard response encoding of **OGC API - Environmental Data
 Retrieval (EDR)** (OGC standard 19-086r6, v1.1). EDR defines a small family of
@@ -238,7 +238,7 @@ comparison has a reference point.
 > below are kept only to contrast vocabularies; the actual selector is
 > `f=CoverageJSON`/`Accept` -- Section 7.1.)
 
-### Option A -- TiTiler-native output format
+### Option A: TiTiler-native output format
 
 CovJSON as a selectable format on TiTiler's **own** endpoint shapes. Our factory
 defines CovJSON-emitting routes that mirror the factory query taxonomy (Section
@@ -272,7 +272,7 @@ read type. Suffix vs query parameter is a sub-decision -- Section 7.1.)
 - **Growth path:** can later add an EDR facade in front of these without
   rework, but that facade is net-new work if we ever want conformance.
 
-### Option B -- Hybrid: EDR vocabulary + extension mechanism (recommended)
+### Option B: Hybrid EDR vocabulary + extension mechanism (recommended)
 
 EDR-aligned **request vocabulary** (and, eventually, EDR endpoint names),
 delivered through the same dedicated-factory mechanism + dependency-injector reuse
@@ -321,7 +321,7 @@ yet honor z/t (Section 7.6). So the first slice is a TiTiler-native
   vocabulary carries over rename-free; the only verb churn is the planned
   `/bbox` -> `/cube` promotion when z/t lands.
 
-### Option C -- Full OGC API-EDR conformance
+### Option C: Full OGC API-EDR conformance
 
 Commit to EDR as the API contract: landing page, `/conformance`, a
 `/collections` model with per-collection `data_queries`, `parameter_names`,
@@ -591,7 +591,7 @@ subclass (Section 2.2) that reuses TiTiler's dependency injectors.** Rationale:
   *parameter* vocabulary and selection mechanism are already "right"; only the
   verb is deliberately deferred from `/cube`.
 
-### 8.1 Decision guide -- keyed to the conformance question
+### 8.1 Decision guide: keyed to the conformance question
 
 The one decision only the designer can make is whether **EDR conformance is a
 project goal** (Section 9, question 1). That single answer selects the path:

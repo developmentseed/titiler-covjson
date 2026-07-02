@@ -87,7 +87,7 @@ class CovJSONFactory(BaseFactory):
         """Validate the sizing invariant, then register routes (base init).
 
         Raises:
-            ValueError: If ``max_cells < default_max_size ** 2`` -- a full-extent
+            ValueError: If ``max_cells < default_max_size ** 2``. A full-extent
                 read at the downsampling default could otherwise exceed the
                 ceiling and be wrongly rejected.
         """

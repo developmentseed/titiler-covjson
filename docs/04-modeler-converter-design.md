@@ -451,7 +451,7 @@ CoverageInput = (
 )
 ```
 
-Each variant's `__post_init__` enforces its own contract (e.g.
+Each variant's `__post_init__` enforces its own contract (e.g.,
 `PointSeriesInput`: `data.ndim == 2 and data.shape[1] == len(timestamps)`;
 `TrajectoryInput`: `data.shape[1] == len(geometry.coords)`), so an invalid
 combination fails at construction -- at the read site -- instead of deep in

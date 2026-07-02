@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
     # The value type of ``Coverage.ranges``. A dict is invariant in its value
     # type, so ``_create_grid_ranges`` must be annotated with the full union
-    # covjson-pydantic accepts -- not just the NdArray subtypes it produces.
+    # covjson-pydantic accepts, not just the NdArray subtypes it produces.
     RangeValue = NdArrayFloat | NdArrayInt | NdArrayStr | TiledNdArray | AnyUrl
 
 # Axis labels for a gridded range, in row-major order: rows (y) then columns (x).
@@ -48,8 +48,8 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
     """Convert a :class:`CoverageInput` to a CovJSON ``Coverage``.
 
     Dispatches on the concrete input variant via ``match``; currently only
-    :class:`~titiler_covjson.input.GridInput` is handled. Point and
-    PointSeries variants are added in later stories.
+    :class:`~titiler_covjson.input.GridInput` is handled. Other domain variants
+    (such as Point and PointSeries) are not yet supported.
 
     Args:
         coverage_input: The intermediate representation to convert.
@@ -108,8 +108,8 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
 def _compact_axis(first: float, last: float, num: int) -> CompactAxis:
     """Build a CompactAxis of cell centers spanning the ``first``..``last`` edges.
 
-    A CompactAxis describes the coordinates at which cells are defined -- the cell
-    *centers* -- whereas ``first``/``last`` are the outer bounds *edges*. The
+    A CompactAxis describes the coordinates at which cells are defined (the cell
+    *centers*), whereas ``first``/``last`` are the outer bounds *edges*. The
     centers are inset from the edges by half a cell, so for ``num`` cells spanning
     ``first``..``last`` the axis runs ``first + dx/2`` .. ``last - dx/2`` where
     ``dx = (last - first) / num``.

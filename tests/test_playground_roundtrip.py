@@ -4,22 +4,22 @@ Each test class corresponds to a file from the CoverageJSON playground at
 https://covjson.org/playground/ and verifies two things:
 
 1. The example JSON parses into the correct pydantic model.
-2. The parsed model round-trips stably: serialise → parse → re-serialise
-   produces identical JSON (i.e. the representation is canonical).
+2. The parsed model round-trips stably: serialise -> parse -> re-serialise
+   produces identical JSON (i.e., the representation is canonical).
 
 Where a playground example could not be used verbatim, the adaptation is
 documented in the test-class docstring.
 """
 
 # ---------------------------------------------------------------------------
-# Playground gaps — files that cannot currently be tested
+# Playground gaps: files that cannot currently be tested
 # ---------------------------------------------------------------------------
 #
 # grid-tiled.covjson is now tested (TestPlaygroundGridTiled), but not verbatim:
 # its year-only t values ("2010", "2011") are silently coerced to Unix
 # timestamps (~1970-01-01T00:33:30Z) by pydantic's ValuesAxis[AwareDatetime]
-# -- the same data-corruption hazard documented in TestPlaygroundPolygonSeries
-# -- so the test adapts them to full RFC 3339 timestamps. The integer
+# (the same data-corruption hazard documented in TestPlaygroundPolygonSeries),
+# so the test adapts them to full RFC 3339 timestamps. The integer
 # TiledNdArray range that previously also blocked this file (covjson-pydantic
 # issue #31) was resolved in 0.8.0, which unified TiledNdArray to accept float,
 # integer, and string dataType.
@@ -246,8 +246,8 @@ class TestPlaygroundGridTiled:
 class TestPlaygroundGridCategorical:
     """Playground grid-categorical.covjson: Coverage / Grid / categorical LC.
 
-    Adaptation: ``preferredColor`` removed from category objects — the
-    ``Category`` model has no ``extra="allow"``.
+    Adaptation: ``preferredColor`` removed from category objects (the
+    ``Category`` model has no ``extra="allow"``).
     """
 
     EXAMPLE: dict[str, Any] = {
@@ -454,8 +454,8 @@ class TestPlaygroundPoint:
     """Playground point.covjson: Coverage / Point / POTM + categorical QC.
 
     Adaptation: date-only t value ``"2013-01-01"`` promoted to
-    ``"2013-01-01T00:00:00Z"`` — ``ValuesAxis[AwareDatetime]`` requires a
-    timezone-aware datetime.
+    ``"2013-01-01T00:00:00Z"`` (``ValuesAxis[AwareDatetime]`` requires a
+    timezone-aware datetime).
     """
 
     EXAMPLE: dict[str, Any] = {
@@ -981,7 +981,7 @@ class TestPlaygroundPointCollection:
     """Playground point-collection.covjson: CoverageCollection with shared params.
 
     Adaptation: date-only t values ``"2013-01-01"`` promoted to
-    ``"2013-01-01T00:00:00Z"`` — same reason as TestPlaygroundPoint.
+    ``"2013-01-01T00:00:00Z"`` (same reason as TestPlaygroundPoint).
     """
 
     EXAMPLE: dict[str, Any] = {

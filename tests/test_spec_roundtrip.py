@@ -5,14 +5,14 @@ section 9 ("CoverageJSON Object Types and Examples"). Tests check the following:
 
 1. Spec example JSON parses into the correct pydantic model.
 2. The parsed model round-trips stably: serialise -> parse -> re-serialise produces
-   identical JSON (i.e. the representation is canonical).
+   identical JSON (i.e., the representation is canonical).
 
 Where a helper function produces the relevant object, a companion test verifies that
 its output is structurally consistent with the spec and also round-trips stably.
 """
 
 # ---------------------------------------------------------------------------
-# Spec model gaps — features that cannot currently be tested
+# Spec model gaps: features that cannot currently be tested
 # ---------------------------------------------------------------------------
 #
 # Domain types absent from the DomainType enum (spec OGC 21-069r2 Section 9.10):
@@ -74,7 +74,7 @@ class TestSection93Units:
         },
     }
 
-    # Supplementary unit example (Kelvin) – not a direct spec quote, constructed
+    # Supplementary unit example (Kelvin): not a direct spec quote, constructed
     # to exercise a second UCUM symbol and the label field independently.
     SPEC_UNIT_KELVIN: dict[str, Any] = {
         "label": {"en": "Kelvin"},
@@ -230,14 +230,14 @@ class TestSection93Parameter:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.4 – ParameterGroup objects
+# Section 9.4: ParameterGroup objects
 # ---------------------------------------------------------------------------
 
 
 class TestSection94ParameterGroup:
     """Spec section 9.4: ParameterGroup objects."""
 
-    # Vector quantity group – no id, no label, only observedProperty.
+    # Vector quantity group: no id, no label, only observedProperty.
     SPEC_WIND_GROUP: dict[str, Any] = {
         "type": "ParameterGroup",
         "observedProperty": {
@@ -246,7 +246,7 @@ class TestSection94ParameterGroup:
         "members": ["WIND_SPEED", "WIND_DIR"],
     }
 
-    # Uncertainty information group – has both label and observedProperty.
+    # Uncertainty information group: has both label and observedProperty.
     SPEC_SST_UNCERTAINTY_GROUP: dict[str, Any] = {
         "type": "ParameterGroup",
         "label": {"en": "Daily sea surface temperature with uncertainty information"},
@@ -297,7 +297,7 @@ class TestSection94ParameterGroup:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.5.1.1 – Geographic CRS
+# Section 9.5.1.1: Geographic CRS
 # ---------------------------------------------------------------------------
 
 
@@ -356,7 +356,7 @@ class TestSection951GeographicCRS:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.5.1.2 – Projected CRS
+# Section 9.5.1.2: Projected CRS
 # ---------------------------------------------------------------------------
 
 
@@ -397,7 +397,7 @@ class TestSection951ProjectedCRS:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.5.1.3 – Vertical CRS
+# Section 9.5.1.3: Vertical CRS
 # ---------------------------------------------------------------------------
 
 
@@ -422,7 +422,7 @@ class TestSection951VerticalCRS:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.5.2 – Temporal Reference System
+# Section 9.5.2: Temporal Reference System
 # ---------------------------------------------------------------------------
 
 
@@ -469,7 +469,7 @@ class TestSection952TemporalRS:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.5.3 – Identifier-based Reference System
+# Section 9.5.3: Identifier-based Reference System
 # ---------------------------------------------------------------------------
 
 
@@ -520,7 +520,7 @@ class TestSection953IdentifierRS:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.6 – Domain objects
+# Section 9.6: Domain objects
 # ---------------------------------------------------------------------------
 
 
@@ -906,14 +906,14 @@ class TestSection96PolygonSeries:
 
 
 # ---------------------------------------------------------------------------
-# Section 9.6.2 – NdArray objects
+# Section 9.6.2: NdArray objects
 # ---------------------------------------------------------------------------
 
 
 class TestSection962NdArrayRoundtrip:
     """Spec section 9.6.2: NdArray objects."""
 
-    # Exact spec example – float array with two null (missing) values.
+    # Exact spec example: float array with two null (missing) values.
     SPEC_NDARRAY_FLOAT: dict[str, Any] = {
         "type": "NdArray",
         "dataType": "float",
