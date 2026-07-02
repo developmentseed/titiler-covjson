@@ -89,6 +89,25 @@ def unit_tagged_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.fixture(scope="session")
+def scaled_int_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Write a 4x4 single-band ``int16`` COG carrying a GDAL scale of 0.01.
+
+    The stored integers (2550, 2551, ...) represent physical values (25.50,
+    25.51, ...). Reading with ``unscale`` casts the band to float and applies
+    the scale, so the returned array's dtype differs from the source storage
+    dtype: exercises selecting the range value type from the read array rather
+    than the declared storage dtype. Session-scoped.
+
+    Returns:
+        str: Filesystem path to the written COG.
+    """
+    path = str(tmp_path_factory.mktemp("data") / "scaled_int.tif")
+    _write_scaled_int_cog(path)
+
+    return path
+
+
+@pytest.fixture(scope="session")
 def tiny_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Write a 2x2 2-band EPSG:4326 raster with a nodata sentinel on band 2.
 
@@ -259,3 +278,33 @@ def _write_cog(
 
         if band1_unit is not None:
             dst.update_tags(1, units=band1_unit)
+
+
+def _write_scaled_int_cog(path: str) -> None:
+    """Write a 4x4 single-band ``int16`` GeoTIFF with a GDAL scale of 0.01.
+
+    Band 1 holds ``2550 .. 2565`` row-major; the ``0.01`` scale makes the
+    physical values ``25.50 .. 25.65``. The extent matches the other fixtures at
+    ``(-10, -5, 10, 5)``.
+
+    Args:
+        path: Destination filesystem path.
+    """
+    bounds = (-10.0, -5.0, 10.0, 5.0)
+    width = height = 4
+    transform = rasterio.transform.from_bounds(*bounds, width, height)
+    band = (np.arange(width * height, dtype="int16") + 2550).reshape(height, width)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "int16",
+        "count": 1,
+        "width": width,
+        "height": height,
+        "crs": pyproj.CRS.from_epsg(4326),
+        "transform": transform,
+    }
+
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(band, 1)
+        dst.scales = (0.01,)
+        dst.set_band_description(1, "temp")

@@ -110,6 +110,39 @@ def test_bbox_bidx_aligns_selected_band_metadata_and_values(
     assert body["ranges"]["b2"]["values"] == [None, 1.0, 2.0, 3.0]
 
 
+def test_bbox_integer_band_serializes_as_integer(
+    client: TestClient, scaled_int_cog_path: str
+) -> None:
+    # An integer source read without unscaling keeps its integer storage dtype,
+    # so the range is typed `integer` and carries the raw stored values.
+    response = client.get(
+        "/bbox/-10,-5,10,5",
+        params={"url": scaled_int_cog_path, "width": 4, "height": 4},
+    )
+    assert response.status_code == 200, response.text
+    band = response.json()["ranges"]["b1"]
+    assert band["dataType"] == "integer"
+    assert band["values"][:4] == [2550, 2551, 2552, 2553]
+
+
+def test_bbox_unscale_tracks_read_array_dtype(
+    client: TestClient, scaled_int_cog_path: str
+) -> None:
+    # `unscale` casts the integer band to float when applying the scale, so the
+    # range value type must follow the returned array (float), not the source
+    # storage dtype (int); typing it `integer` would truncate 25.50 to 25.
+    response = client.get(
+        "/bbox/-10,-5,10,5",
+        params={"url": scaled_int_cog_path, "width": 4, "height": 4, "unscale": True},
+    )
+    assert response.status_code == 200, response.text
+    band = response.json()["ranges"]["b1"]
+    assert band["dataType"] == "float"
+    # float32 scaling is not exact (25.51 reads back as 25.5100002...), so compare
+    # with tolerance; the point is that the physical value survives, not truncates.
+    assert band["values"][:4] == pytest.approx([25.5, 25.51, 25.52, 25.53], abs=1e-4)
+
+
 def test_bbox_selects_band_by_parameter_name(client: TestClient, cog_path: str) -> None:
     # The EDR parameter-name alias resolves to a band index end-to-end (the unit
     # tests cover the dependency in isolation; this proves the route wiring).

@@ -19,6 +19,7 @@ right status codes.
 # forward-reference hazard there. titiler's own factory omits it for the same
 # reason.
 
+import dataclasses
 import math
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -579,9 +580,17 @@ def _build_grid_input(
         return imagedata_to_coverage_input(image, band_names=band_names, crs=crs)
 
     by_name = {band.name: band for band in band_info_from_reader_info(info)}
-    bands = tuple(by_name[name] for name in image.band_names if name in by_name)
+    # A read can change dtype from the source storage dtype (e.g., unscale casts
+    # an integer band to float when applying scale/offset), so select the
+    # CoverageJSON range type from the returned array's dtype, not info's. Each
+    # returned band name is looked up directly: a missing one is an internal
+    # invariant break that should surface loudly, not be silently dropped.
+    bands = tuple(
+        dataclasses.replace(by_name[name], dtype=image.array.dtype)
+        for name in image.band_names
+    )
 
-    return imagedata_to_coverage_input(image, bands=bands or None, crs=crs)
+    return imagedata_to_coverage_input(image, bands=bands, crs=crs)
 
 
 def _expression_band_names(expression: str) -> tuple[str, ...]:
