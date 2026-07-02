@@ -9,7 +9,7 @@
 > [`modeler.py`](../src/titiler_covjson/modeler.py). For example, the actual
 > functions are `crs_to_ogc_uri`, `create_spatial_2d_reference`,
 > `create_temporal_reference`, and `numpy_to_covjson_dtype`, and
-> `crs_to_ogc_uri` raises on an unrecognised authority rather than defaulting to
+> `crs_to_ogc_uri` raises on an unrecognized authority rather than defaulting to
 > CRS84.
 
 ## 1. Overview

@@ -6,10 +6,11 @@ CoverageJSON output format and API extension for
 ## Overview
 
 `titiler-covjson` adds
-[CoverageJSON](https://github.com/opengeospatial/CoverageJSON) (OGC Community
-Standard 21-069r2) as an output format for TiTiler, so a TiTiler deployment can
-serve raster data as standards-compliant, interoperable CoverageJSON. It is a
-FastAPI router extension (a `titiler.core` factory), not a standalone service.
+[CoverageJSON](https://github.com/opengeospatial/CoverageJSON) (an Open
+Geospatial Consortium (OGC) Community Standard, 21-069r2) as an output format
+for TiTiler, so a TiTiler deployment can serve raster data as
+standards-compliant, interoperable CoverageJSON. It is a FastAPI router
+extension (a `titiler.core` factory), not a standalone service.
 
 ## Status
 
@@ -21,7 +22,8 @@ endpoint returning a 2-D Grid-domain coverage from one dataset.
   Environmental Data Retrieval (EDR) `parameter-name` alias), a single `crs`
   knob, output sizing, and a cell-count ceiling.
 - **Planned:** point and transect queries, temporal (time series) extraction,
-  further coverage domains, and multi-dataset / STAC sources.
+  further coverage domains, and multi-dataset / SpatioTemporal Asset Catalog
+  (STAC) sources.
 
 ## Installation
 

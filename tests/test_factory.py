@@ -364,7 +364,7 @@ def test_bbox_huge_max_size_hits_ceiling_pre_read(
 ) -> None:
     # max_size caps the longest output axis at min(max_size, native). On a source
     # whose native resolution exceeds the default cap, a max_size at/above
-    # default_max_size resolves to a grid over the default max_cells -- and it is
+    # default_max_size resolves to a grid over the default max_cells, and it is
     # resolved pre-read, so it is rejected before allocation ("Requested"), not by
     # the post-read backstop after a large read (the max_size DoS this closes).
     response = client.get(
@@ -429,7 +429,7 @@ def test_resolve_grid_dimensions_matches_rio_tiler(
     # reads, a lone width/height, a max_size cap (wider and taller windows), a
     # clamp-to-native, and a native read. If it drifts, the cell-count ceiling
     # would guard a different grid than the one allocated, silently reopening the
-    # DoS -- so this fails loudly if rio-tiler ever changes its derivation.
+    # DoS, so this fails loudly if rio-tiler ever changes its derivation.
     read_crs = rasterio.CRS.from_epsg(read_epsg)
 
     with Reader(cog_path) as src:

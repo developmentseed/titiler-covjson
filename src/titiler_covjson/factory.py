@@ -323,9 +323,6 @@ def _resolve_grid_dimensions(
     - neither given: ``max_size`` caps the longer axis of the read window, or,
       when ``max_size`` is also ``None``, the native window is read.
 
-    A test locks this in step with ``part``, so a change to its derivation fails
-    loudly rather than silently defeating the cell-count ceiling.
-
     Args:
         dataset: The open rasterio dataset, for the read-window geometry.
         bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
@@ -359,7 +356,9 @@ def _resolve_grid_dimensions(
         Every other case (a lone dimension, or a ``max_size`` cap) is derived
         from the read window, so it needs an open dataset and is not shown here.
     """
-
+    # The derivation mirrors rio_tiler.reader.part; the lock-in test
+    # test_resolve_grid_dimensions_matches_rio_tiler guards against drift that
+    # would silently defeat the pre-read cell-count ceiling.
     if width is not None and height is not None:
         return width, height
 
@@ -407,8 +406,7 @@ def _scale_to_max_size(
 
     Replicates rio-tiler's ``max_size`` handling: when the window already fits,
     it is returned unchanged, otherwise the longer axis is set to ``max_size``
-    and the shorter is scaled to match (rounding up). A test locks this in step
-    with ``rio_tiler.reader.part``, so a change to its behavior fails loudly.
+    and the shorter is scaled to match (rounding up).
 
     Args:
         max_size: The longest-output-dimension cap.
@@ -426,6 +424,8 @@ def _scale_to_max_size(
         >>> _scale_to_max_size(100, 40, 40)  # already within max_size
         (40, 40)
     """
+    # Replicates rio_tiler.reader.part's _get_width_height; the same lock-in test
+    # that guards _resolve_grid_dimensions catches drift here.
     if max(window_width, window_height) < max_size:
         return window_width, window_height
 
