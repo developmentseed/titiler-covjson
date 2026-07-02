@@ -362,6 +362,18 @@ def test_bbox_huge_max_size_hits_ceiling_pre_read(
     assert "exceeds limit" in response.json()["detail"]
 
 
+def test_bbox_rejects_subpixel_thin_bbox(
+    client: TestClient, wide_cog_path: str
+) -> None:
+    # A box thinner than half a source pixel in one axis rounds that read-window
+    # axis to 0. With a max_size cap and no explicit width/height, rio-tiler's own
+    # max_size scaling would divide by zero (a 500); the pre-read guard turns this
+    # unsamplable box into an actionable 400 instead.
+    response = client.get("/bbox/0,-5,0.005,5", params={"url": wide_cog_path})
+    assert response.status_code == 400, response.text
+    assert "too thin to sample" in response.json()["detail"]
+
+
 _FULL_BOUNDS = (-10.0, -5.0, 10.0, 5.0)  # 16x16 source -> square read window
 _TALL_BOUNDS = (-10.0, -5.0, 0.0, 5.0)  # narrow in x, full in y -> taller window
 

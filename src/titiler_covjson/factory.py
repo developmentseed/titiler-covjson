@@ -338,6 +338,12 @@ def _resolve_grid_dimensions(
     Returns:
         tuple[int, int]: The resolved ``(width, height)``.
 
+    Raises:
+        BadRequestError: If neither dimension is given and the bounding box is
+            too thin to sample (a read-window axis rounds to zero). The host
+            application's titiler exception handlers render this as a 400
+            response.
+
     Examples:
         Both dimensions given are returned unchanged; this is the only case that
         short-circuits before the read window is consulted, so ``dataset`` and
@@ -376,8 +382,19 @@ def _resolve_grid_dimensions(
     if height is not None:
         return math.ceil(height / ratio), height
 
+    # A box thinner than half a source pixel in an axis rounds that read-window
+    # axis to zero: it cannot be sampled, and rio-tiler's own max_size scaling
+    # would divide by zero on it. Reject it here, before the read, as bad input.
+    if round(window_width) < 1 or round(window_height) < 1:
+        msg = (
+            "Bounding box is too thin to sample: it spans less than half a source "
+            "pixel in one dimension. Widen the box, or request an explicit width "
+            "and height."
+        )
+        raise BadRequestError(msg)
+
     if max_size is None:
-        return max(1, round(window_width)), max(1, round(window_height))
+        return round(window_width), round(window_height)
 
     return _scale_to_max_size(max_size, round(window_width), round(window_height))
 
