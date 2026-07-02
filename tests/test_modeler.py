@@ -117,7 +117,7 @@ class TestGridCoverage:
         """A 1-cell axis's single center is the bounds midpoint.
 
         With one cell the center sits half a cell in from each edge, i.e., at
-        the bounds midpoint, so ``start == stop`` (here 0.0, the centre of the
+        the bounds midpoint, so ``start == stop`` (here 0.0, the center of the
         symmetric -10..10 / -5..5 bounds).
         """
         data = _masked(np.zeros(shape, dtype="float32"))

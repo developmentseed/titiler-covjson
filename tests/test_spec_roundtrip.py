@@ -4,7 +4,7 @@ Each test class targets a specific subsection of OGC Community Standard 21-069r2
 section 9 ("CoverageJSON Object Types and Examples"). Tests check the following:
 
 1. Spec example JSON parses into the correct pydantic model.
-2. The parsed model round-trips stably: serialise -> parse -> re-serialise produces
+2. The parsed model round-trips stably: serialize -> parse -> re-serialize produces
    identical JSON (i.e., the representation is canonical).
 
 Where a helper function produces the relevant object, a companion test verifies that
@@ -512,7 +512,7 @@ class TestSection953IdentifierRS:
         assert roundtrip_is_stable(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
 
     def test_spec_identifier_rs_multilingual_labels_preserved(self) -> None:
-        """Both language tags survive round-trip serialisation."""
+        """Both language tags survive round-trip serialization."""
         result = roundtrip(ReferenceSystem, self.SPEC_IDENTIFIER_RS)
         assert result["identifiers"]["gb"]["label"]["de"] == "Vereinigtes Königreich"
         assert result["identifiers"]["gb"]["label"]["en"] == "United Kingdom"
@@ -946,7 +946,7 @@ class TestSection962NdArrayRoundtrip:
         assert_schema_valid(parse(NdArrayFloat, self.SPEC_NDARRAY_FLOAT), "ndArray")
 
     def test_spec_ndarray_null_values_survive_roundtrip(self) -> None:
-        """Null values in the spec example remain null after serialisation."""
+        """Null values in the spec example remain null after serialization."""
         result = roundtrip(NdArrayFloat, self.SPEC_NDARRAY_FLOAT)
         assert result["values"][4] is None
         assert result["values"][5] is None

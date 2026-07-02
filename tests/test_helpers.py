@@ -26,21 +26,21 @@ class TestCrsToOgcUri:
     # Success cases are tested in doctests for crs_to_ogc_uri.
 
     def test_no_authority_raises(self) -> None:
-        """Test that a CRS with no recognised authority raises ValueError."""
+        """Test that a CRS with no recognized authority raises ValueError."""
         crs = rasterio.CRS.from_proj4(
             "+proj=tmerc +lat_0=0 +lon_0=100 +k=0.9996 +x_0=500000 +y_0=0 +datum=WGS84"
         )
-        with pytest.raises(ValueError, match="no recognised authority code"):
+        with pytest.raises(ValueError, match="no recognized authority code"):
             crs_to_ogc_uri(crs)
 
     def test_unsupported_authority_raises(self) -> None:
-        """A recognised but unsupported authority (not EPSG/OGC) raises ValueError.
+        """A recognized but unsupported authority (not EPSG/OGC) raises ValueError.
 
         ESRI:54009 (World Mollweide) has no EPSG equivalent, so ``to_authority()``
         returns ``("ESRI", ...)``, exercising the path where an authority *is*
         found but is absent from the supported URI templates.
         """
-        with pytest.raises(ValueError, match="no recognised authority code"):
+        with pytest.raises(ValueError, match="no recognized authority code"):
             crs_to_ogc_uri(rasterio.CRS.from_string("ESRI:54009"))
 
 
@@ -71,7 +71,7 @@ class TestNumpyDtypeToNdarray:
         assert nd.values[0] == 1.0
         assert math.isnan(nd.values[1])  # type: ignore[arg-type]
         assert nd.values[2] == 3.0
-        # model_dump_json() serialises the masked NaN as null, which is valid
+        # model_dump_json() serializes the masked NaN as null, which is valid
         # per the schema ("type": ["number", "null"]).
         assert_schema_valid(nd, "ndArray")
 
@@ -212,6 +212,6 @@ class TestCreateUnit:
         )
 
     def test_unknown_unit(self) -> None:
-        """Test that an unrecognised code returns None."""
+        """Test that an unrecognized code returns None."""
         assert create_unit("furlongs") is None
         assert create_unit("") is None

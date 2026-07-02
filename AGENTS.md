@@ -187,6 +187,8 @@ substitutes, and `Depends` is reserved for leaf request concerns.
 
 - Spell out acronyms on first use with brief motivation (e.g., "UCUM (Unified
   Code for Units of Measure)").
+- Use American English spelling (e.g., "meter", "serialize", "recognized",
+  "center", not "metre", "serialise", "recognised", "centre").
 - Use `e.g.,` / `i.e.,` with a trailing comma; write "Section" rather than the
   section symbol.
 - Em dashes: prefer colons, parentheses, and shorter sentences over reaching for

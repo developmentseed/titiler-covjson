@@ -159,9 +159,9 @@ def validate_covjson(instance: dict[str, Any], definition: str | None = None) ->
 
 
 def assert_schema_valid(model: BaseModel, definition: str | None = None) -> None:
-    """Serialise a model and validate it against the CoverageJSON schema.
+    """Serialize a model and validate it against the CoverageJSON schema.
 
-    ``model_dump_json(exclude_none=True)`` is used so that optional members serialised
+    ``model_dump_json(exclude_none=True)`` is used so that optional members serialized
     as ``null`` are omitted: the schema types those members as arrays/objects/strings
     and rejects an explicit ``null``. Null *elements* inside ``values`` arrays (i.e.,
     missing data) are list items, not members, so they are preserved and remain

@@ -423,7 +423,7 @@ def _validate_label_crs(crs: rasterio.CRS) -> None:
     """Reject an output CRS that cannot be expressed as an OGC CRS URI.
 
     The coverage identifies its Coordinate Reference System (CRS) by an OGC
-    Uniform Resource Identifier (URI), which requires a recognised authority
+    Uniform Resource Identifier (URI), which requires a recognized authority
     (such as EPSG). The ``crs`` request parameter accepts anything rasterio can
     parse (Well-Known Text, PROJ strings, ESRI codes), so a CRS with no such
     authority would otherwise reach the modeler and the response header, where

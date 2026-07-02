@@ -218,7 +218,7 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
         str: OGC URI string.
 
     Raises:
-        ValueError: If the CRS has no recognised authority code.
+        ValueError: If the CRS has no recognized authority code.
 
     Note:
         Supported authorities and their URI patterns:
@@ -239,7 +239,7 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
         if template := _AUTHORITY_URI_TEMPLATES.get(authority.upper()):
             return template.format(code)
 
-    msg = f"Cannot convert CRS {crs} to an OGC URI: no recognised authority code"
+    msg = f"Cannot convert CRS {crs} to an OGC URI: no recognized authority code"
     raise ValueError(msg)
 
 
@@ -252,7 +252,7 @@ def numpy_dtype_to_ndarray(
 
     Selects ``NdArrayFloat``, ``NdArrayInt``, or ``NdArrayStr`` based on `dtype`
     (the band's declared dtype, not necessarily the array's own dtype). Masked
-    values are serialised as ``NaN`` (float) or ``None`` (integer / string) per
+    values are serialized as ``NaN`` (float) or ``None`` (integer / string) per
     the CoverageJSON spec.
 
     Args:
@@ -285,7 +285,7 @@ def numpy_dtype_to_ndarray(
         # which may be float over an integer array (BandInfo.dtype defaults to
         # float32). MaskedArray.filled casts the fill value to the array's own
         # dtype, so filling an int array with NaN would raise; astype preserves
-        # the mask. Masked entries become NaN, which pydantic serialises as null.
+        # the mask. Masked entries become NaN, which pydantic serializes as null.
         floats = data.astype(np.float64).filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call, attr-defined, unused-ignore]
         return NdArrayFloat(values=floats, axisNames=list(axis_names), shape=shape)
 

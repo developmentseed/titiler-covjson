@@ -4,7 +4,7 @@ Each test class corresponds to a file from the CoverageJSON playground at
 https://covjson.org/playground/ and verifies two things:
 
 1. The example JSON parses into the correct pydantic model.
-2. The parsed model round-trips stably: serialise -> parse -> re-serialise
+2. The parsed model round-trips stably: serialize -> parse -> re-serialize
    produces identical JSON (i.e., the representation is canonical).
 
 Where a playground example could not be used verbatim, the adaptation is
@@ -121,7 +121,7 @@ class TestPlaygroundGrid:
         assert param.unit.symbol.value == "1"
 
     def test_null_range_value_preserved(self) -> None:
-        """Null value in ICEC range survives round-trip serialisation."""
+        """Null value in ICEC range survives round-trip serialization."""
         result = roundtrip(Coverage, self.EXAMPLE)
         assert result["ranges"]["ICEC"]["values"][5] is None
 
@@ -552,7 +552,7 @@ class TestPlaygroundPoint:
         assert enc["http://mmisw.org/ont/argo/qualityFlag/_4"] == 4
 
     def test_scalar_ranges(self) -> None:
-        """Scalar NdArrays (no axisNames/shape) parse and serialise cleanly."""
+        """Scalar NdArrays (no axisNames/shape) parse and serialize cleanly."""
         result = roundtrip(Coverage, self.EXAMPLE)
         assert result["ranges"]["POTM"]["values"] == [pytest.approx(23.8)]
         assert result["ranges"]["QC"]["values"] == [1]
