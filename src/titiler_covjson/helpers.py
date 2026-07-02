@@ -281,7 +281,12 @@ def numpy_dtype_to_ndarray(
     shape = list(data.shape)
 
     if covjson_dtype == "float":
-        floats = data.filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call, unused-ignore]
+        # Cast to float before filling: `dtype` is the band's *declared* dtype,
+        # which may be float over an integer array (BandInfo.dtype defaults to
+        # float32). MaskedArray.filled casts the fill value to the array's own
+        # dtype, so filling an int array with NaN would raise; astype preserves
+        # the mask. Masked entries become NaN, which pydantic serialises as null.
+        floats = data.astype(np.float64).filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call, attr-defined, unused-ignore]
         return NdArrayFloat(values=floats, axisNames=list(axis_names), shape=shape)
 
     # For int/str, build a boolean mask array (never scalar).
