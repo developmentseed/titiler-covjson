@@ -247,6 +247,19 @@ def test_bbox_selects_bands_by_expression(
     assert body["ranges"]["b1+b2"]["values"] == [None, 2.0, 4.0, 6.0]
 
 
+def test_bbox_expression_with_trailing_semicolon(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A trailing ; leaves an empty sub-expression. rio-tiler drops it when reading,
+    # so deriving names the same way keeps the parameter keys one-to-one with the
+    # returned bands (a naive split would emit a stray empty name and 500).
+    response = client.get(
+        "/bbox/-10,-5,10,5", params={"url": tiny_cog_path, "expression": "b1;b1+b2;"}
+    )
+    assert response.status_code == 200, response.text
+    assert set(response.json()["parameters"]) == {"b1", "b1+b2"}
+
+
 def test_bbox_rejects_duplicate_expression(client: TestClient, cog_path: str) -> None:
     # Overlaps the _expression_band_names doctest by design: the doctest proves the
     # pure function raises, while this proves that raise (from *after* the read)

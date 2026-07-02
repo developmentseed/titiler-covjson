@@ -30,6 +30,7 @@ from fastapi import Depends, Path
 from rasterio import windows
 from rasterio.io import DatasetReader
 from rio_tiler.constants import WGS84_CRS
+from rio_tiler.expression import get_expression_blocks
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData, Info
 from rio_tiler.utils import get_vrt_transform
@@ -630,13 +631,23 @@ def _expression_band_names(expression: str) -> tuple[str, ...]:
     Examples:
         >>> _expression_band_names("b1;b2/b1")
         ('b1', 'b2/b1')
+
+        Empty sub-expressions (e.g., from a trailing ``;``) are dropped, so the
+        names stay one-to-one with the bands the read returns:
+
+        >>> _expression_band_names("b1;b2/b1;")
+        ('b1', 'b2/b1')
+
         >>> _expression_band_names("b1;b1")
         Traceback (most recent call last):
             ...
         titiler.core.errors.BadRequestError: Duplicate expression: derived
         band names must be unique; got ('b1', 'b1').
     """
-    names = tuple(name for part in expression.split(";") if (name := part.strip()))
+    # Tokenize with rio-tiler's own block splitter so our per-band names stay in
+    # exact one-to-one correspondence with the bands the read returns for the
+    # same expression (it splits on ``;`` and drops empty sub-expressions).
+    names = tuple(block.strip() for block in get_expression_blocks(expression))
 
     if len(set(names)) != len(names):
         msg = f"Duplicate expression: derived band names must be unique; got {names}."
