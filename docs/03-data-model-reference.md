@@ -1,8 +1,20 @@
 # Data Model Reference
 
+> **Superseded in detail.** This is an early design reference. The concepts
+> (covjson-pydantic as the model layer, a set of project helpers) still hold,
+> but the helper names, signatures, and behavior sketched below have drifted
+> from the implementation. Treat the source modules as authoritative:
+> [`helpers.py`](../src/titiler_covjson/helpers.py),
+> [`input.py`](../src/titiler_covjson/input.py), and
+> [`modeler.py`](../src/titiler_covjson/modeler.py). For example, the actual
+> functions are `crs_to_ogc_uri`, `create_spatial_2d_reference`,
+> `create_temporal_reference`, and `numpy_to_covjson_dtype`, and
+> `crs_to_ogc_uri` raises on an unrecognised authority rather than defaulting to
+> CRS84.
+
 ## 1. Overview
 
-titiler-covjson uses [`covjson-pydantic`](https://github.com/KNMI/covjson-pydantic) (v0.7.0+, KNMI) as its CoverageJSON model layer. This document describes how those models are used and supplemented with project-specific helpers.
+titiler-covjson uses [`covjson-pydantic`](https://github.com/KNMI/covjson-pydantic) (>=0.8.0, KNMI) as its CoverageJSON model layer. This document describes how those models are used and supplemented with project-specific helpers.
 
 See [06-existing-libraries-analysis.md](06-existing-libraries-analysis.md) for a full assessment of the library.
 
@@ -139,9 +151,10 @@ def create_unit(unit_str: str) -> Unit:
 | Trajectory | Yes | |
 | PolygonSeries | Yes | |
 | VerticalProfile | Yes | |
-| **Polygon** | **No** | Not yet in covjson-pydantic (issue #25) |
+| Polygon | Yes | Added in covjson-pydantic 0.8.0 |
 | **MultiPolygon** | **No** | Not yet in covjson-pydantic |
 | **MultiPolygonSeries** | **No** | Not yet in covjson-pydantic |
 | **Section** | **No** | Not yet in covjson-pydantic |
 
-**Workaround for Polygon**: Use `PolygonSeries` without a `t` axis, or use Grid with masking.
+`PolygonSeries` requires a `t` axis, so a single-geometry Polygon coverage uses
+the `Polygon` domain type directly (rather than a `PolygonSeries` workaround).

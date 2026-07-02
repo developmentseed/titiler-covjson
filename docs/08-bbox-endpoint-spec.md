@@ -51,16 +51,18 @@ GET {router_prefix}/bbox/{minx},{miny},{maxx},{maxy}
 
 ## 3. Request parameters
 
-All parameters are reused from `titiler.core` dependency-injectors except the
-EDR `parameter-name` alias, which is layered on top of band selection.
+Most parameters are reused from `titiler.core` dependency-injectors. Band
+selection is delivered by a first-party dependency, `CovJSONBandParams`, which
+layers the EDR `parameter-name` alias on top of the usual `bidx` / `expression`
+selectors and enforces their mutual exclusivity.
 
 | Parameter | Source | Default | Description |
 | --- | --- | --- | --- |
 | `url` | `DatasetPathParams` | required | Dataset URL (single dataset). |
 | `crs` | `CRSParams` | CRS84 | Single CRS knob: interprets the path bbox coordinates **and** the output coverage CRS (Section 4). |
-| `parameter-name` | EDR alias -> `BidxExprParams` | none | Band selection by name, comma-delimited (Section 6). Mutually exclusive with `bidx` and `expression`. |
-| `bidx` | `BidxExprParams` | all bands | Band selection by 1-based index. Mutually exclusive with `parameter-name` and `expression`. |
-| `expression` | `BidxExprParams` | none | rio-tiler band-math expression producing derived bands. Mutually exclusive with `parameter-name` and `bidx`. |
+| `parameter-name` | `CovJSONBandParams` (EDR alias) | none | Band selection by name, comma-delimited (Section 6). Mutually exclusive with `bidx` and `expression`. |
+| `bidx` | `CovJSONBandParams` | all bands | Band selection by 1-based index. Mutually exclusive with `parameter-name` and `expression`. |
+| `expression` | `CovJSONBandParams` | none | rio-tiler band-math expression producing derived bands. Mutually exclusive with `parameter-name` and `bidx`. |
 | `nodata` | `DatasetParams` | dataset value | Override the dataset nodata value; masked pixels serialize as `null`. |
 | `unscale` | `DatasetParams` | `false` | Apply the dataset's internal scale/offset to recover true physical values. |
 | `resampling` | `DatasetParams` | `nearest` | RasterIO resampling algorithm for the read. |
