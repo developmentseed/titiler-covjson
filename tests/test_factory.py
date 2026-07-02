@@ -141,6 +141,22 @@ def test_bbox_rejects_out_of_range_band_index(
     assert "out of range" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "params",
+    [{"bidx": [1, 1]}, {"parameter-name": "b1,b1"}],
+    ids=["duplicate-bidx", "duplicate-parameter-name"],
+)
+def test_bbox_rejects_duplicate_band_index(
+    client: TestClient, cog_path: str, params: dict[str, str | list[int]]
+) -> None:
+    # Duplicate indexes yield duplicate band names, which CoverageInput's
+    # uniqueness check would reject with a bare ValueError (500). The factory
+    # pre-validates and returns an actionable 400 instead.
+    response = client.get("/bbox/-10,-5,10,5", params={"url": cog_path, **params})
+    assert response.status_code == 400, response.text
+    assert "unique" in response.json()["detail"]
+
+
 def test_bbox_selects_bands_by_expression(client: TestClient, cog_path: str) -> None:
     # Each ;-separated sub-expression names a derived band (its CovJSON parameter
     # key), so the keys come from the expression, not the source band names.

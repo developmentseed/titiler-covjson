@@ -509,18 +509,23 @@ def _enforce_cell_ceiling(
 
 
 def _validate_band_indexes(indexes: tuple[int, ...] | None, info: Info) -> None:
-    """Reject out-of-range band indexes before reading.
+    """Reject out-of-range or duplicate band indexes before reading.
 
-    rio-tiler raises a bare ``IndexError`` for an out-of-range index, which the
-    exception handlers map to a misleading 500; this pre-validation turns it
-    into an actionable 400.
+    An out-of-range index makes rio-tiler raise a bare ``IndexError`` (mapped to
+    a misleading 500), and a duplicate index yields duplicate band names that the
+    ``CoverageInput`` uniqueness check later rejects with a bare ``ValueError``
+    (also a 500). Both are plain client input, so this pre-validation turns them
+    into actionable 400s. Covers ``bidx`` and ``parameter-name`` (both resolve to
+    indexes); duplicate band references inside an ``expression`` are handled
+    where the expression is parsed.
 
     Args:
         indexes: The requested 1-based band indexes, or ``None``.
         info: The reader's dataset info, used for the band count.
 
     Raises:
-        BadRequestError: If any index is outside ``1..band_count``.
+        BadRequestError: If any index is outside ``1..band_count``, or an index
+            is requested more than once.
     """
     if indexes is None:
         return
@@ -532,6 +537,10 @@ def _validate_band_indexes(indexes: tuple[int, ...] | None, info: Info) -> None:
             "Requested band index out of range: dataset has "
             f"{band_count} band(s); got {indexes}."
         )
+        raise BadRequestError(msg)
+
+    if len(set(indexes)) != len(indexes):
+        msg = f"Duplicate band index: band indexes must be unique; got {indexes}."
         raise BadRequestError(msg)
 
 
