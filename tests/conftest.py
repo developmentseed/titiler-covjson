@@ -73,6 +73,22 @@ def wide_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.fixture(scope="session")
+def unit_tagged_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Write a 16x16 COG whose band 1 carries a ``units`` tag (``mm``).
+
+    Exercises the reader-info unit probe end to end: the ``units`` GDAL tag flows
+    through ``BandInfo.unit`` to the coverage ``Parameter.unit``. Session-scoped.
+
+    Returns:
+        str: Filesystem path to the written COG.
+    """
+    path = str(tmp_path_factory.mktemp("data") / "unit_tagged.tif")
+    _write_cog(path, width=16, height=16, band1_unit="mm")
+
+    return path
+
+
+@pytest.fixture(scope="session")
 def tiny_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Write a 2x2 2-band EPSG:4326 raster with a nodata sentinel on band 2.
 
@@ -197,7 +213,9 @@ def _make_client(
     return TestClient(app)
 
 
-def _write_cog(path: str, *, width: int, height: int) -> None:
+def _write_cog(
+    path: str, *, width: int, height: int, band1_unit: str | None = None
+) -> None:
     """Write a 2-band EPSG:4326 GeoTIFF: a band-1 ramp and a band-2 nodata copy.
 
     Band 1 is ``0 .. width*height-1`` reshaped row-major; band 2 copies it and
@@ -208,6 +226,8 @@ def _write_cog(path: str, *, width: int, height: int) -> None:
         path: Destination filesystem path.
         width: Raster width in pixels.
         height: Raster height in pixels.
+        band1_unit: When set, a ``units`` GDAL tag written on band 1 (so the
+            unit-resolution path can be exercised).
     """
     bounds = (-10.0, -5.0, 10.0, 5.0)
     nodata = -9999.0
@@ -236,3 +256,6 @@ def _write_cog(path: str, *, width: int, height: int) -> None:
         dst.write(band2, 2)
         dst.set_band_description(1, "red")
         dst.set_band_description(2, "nir")
+
+        if band1_unit is not None:
+            dst.update_tags(1, units=band1_unit)

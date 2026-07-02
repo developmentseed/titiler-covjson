@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import rasterio
 from conftest import validate_covjson
@@ -119,26 +121,63 @@ def test_bbox_selects_band_by_parameter_name(client: TestClient, cog_path: str) 
 
 
 def test_bbox_reprojects_to_projected_crs(client: TestClient, cog_path: str) -> None:
-    # An explicit projected crs exercises the reproject read path (read_crs =
-    # requested) and the projected-CRS referencing branch, distinct from the
-    # WGS84/CRS84 default and the epsg:4326 no-reproject case.
+    # An explicit projected crs exercises the reproject read path. Under the
+    # single-crs knob the bbox is in the requested crs, so this box is Web
+    # Mercator meters inside the 4326 source's reprojected extent (reading these
+    # coordinates as 4326 degrees would fall far outside the source, so a 200
+    # already implies 3857 was used). With an explicit 4x4 grid the cell centers
+    # are exact meter coordinates (x runs west->east, y north->south), which only
+    # hold if the read reprojected to 3857 rather than relabeling degrees.
     response = client.get(
-        "/bbox/-10,-5,10,5", params={"url": cog_path, "crs": "epsg:3857"}
+        "/bbox/-500000,-300000,500000,300000",
+        params={"url": cog_path, "crs": "epsg:3857", "width": 4, "height": 4},
     )
     assert response.status_code == 200, response.text
     assert response.headers["content-crs"] == (
         "<http://www.opengis.net/def/crs/EPSG/0/3857>"
     )
-    referencing = response.json()["domain"]["referencing"]
-    assert referencing[0]["system"]["type"] == "ProjectedCRS"
+    domain = response.json()["domain"]
+    assert domain["referencing"][0]["system"]["type"] == "ProjectedCRS"
+    assert domain["axes"]["x"] == {"start": -375000.0, "stop": 375000.0, "num": 4}
+    assert domain["axes"]["y"] == {"start": 225000.0, "stop": -225000.0, "num": 4}
 
 
+@pytest.mark.parametrize("bidx", [5, 0], ids=["above-range", "below-range"])
 def test_bbox_rejects_out_of_range_band_index(
-    client: TestClient, cog_path: str
+    client: TestClient, cog_path: str, bidx: int
 ) -> None:
-    response = client.get("/bbox/-10,-5,10,5", params={"url": cog_path, "bidx": 5})
+    # The 2-band source rejects both an index above the count and a zero/negative
+    # index (the `i < 1` lower bound), rather than letting rio-tiler 500.
+    response = client.get("/bbox/-10,-5,10,5", params={"url": cog_path, "bidx": bidx})
     assert response.status_code == 400, response.text
     assert "out of range" in response.json()["detail"]
+
+
+def test_bbox_parameter_carries_unit(
+    client: TestClient, unit_tagged_cog_path: str
+) -> None:
+    # End-to-end unit path: a band `units` tag flows through BandInfo.unit and
+    # create_unit (UCUM resolution) to the coverage Parameter.unit. Band 2 has no
+    # unit tag, so its parameter carries no unit member.
+    response = client.get("/bbox/-10,-5,10,5", params={"url": unit_tagged_cog_path})
+    assert response.status_code == 200, response.text
+    parameters = response.json()["parameters"]
+    assert parameters["b1"]["unit"]["symbol"]["value"] == "mm"
+    assert parameters["b1"]["unit"]["label"] == {"en": "millimeters"}
+    assert "unit" not in parameters["b2"]
+
+
+def test_bbox_rejects_conflicting_band_selectors(
+    client: TestClient, cog_path: str
+) -> None:
+    # bidx and expression are mutually exclusive; CovJSONBandParams raises during
+    # Depends resolution, which must map to 400 through the exception handlers.
+    response = client.get(
+        "/bbox/-10,-5,10,5",
+        params={"url": cog_path, "bidx": 1, "expression": "b1+b2"},
+    )
+    assert response.status_code == 400, response.text
+    assert "Supply only one" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -157,14 +196,22 @@ def test_bbox_rejects_duplicate_band_index(
     assert "unique" in response.json()["detail"]
 
 
-def test_bbox_selects_bands_by_expression(client: TestClient, cog_path: str) -> None:
+def test_bbox_selects_bands_by_expression(
+    client: TestClient, tiny_cog_path: str
+) -> None:
     # Each ;-separated sub-expression names a derived band (its CovJSON parameter
-    # key), so the keys come from the expression, not the source band names.
+    # key), and its values are the computed band math. On the 2x2 fixture band 1
+    # is the ramp 0..3 and band 2 copies it with a nodata top-left; rio-tiler
+    # masks that pixel across every expression output, so the leading value is
+    # null and the rest carry the math (b1 -> the ramp, b1+b2 -> the doubled ramp).
     response = client.get(
-        "/bbox/-10,-5,10,5", params={"url": cog_path, "expression": "b1;b1+b2"}
+        "/bbox/-10,-5,10,5", params={"url": tiny_cog_path, "expression": "b1;b1+b2"}
     )
     assert response.status_code == 200, response.text
-    assert set(response.json()["parameters"]) == {"b1", "b1+b2"}
+    body = response.json()
+    assert set(body["parameters"]) == {"b1", "b1+b2"}
+    assert body["ranges"]["b1"]["values"] == [None, 1.0, 2.0, 3.0]
+    assert body["ranges"]["b1+b2"]["values"] == [None, 2.0, 4.0, 6.0]
 
 
 def test_bbox_rejects_duplicate_expression(client: TestClient, cog_path: str) -> None:
@@ -393,12 +440,13 @@ def test_bbox_requires_url(client: TestClient) -> None:
     assert response.status_code == 422, response.text
 
 
-def test_bbox_unreadable_url_is_server_error(client: TestClient) -> None:
+def test_bbox_unreadable_url_is_server_error(
+    client: TestClient, tmp_path: Path
+) -> None:
     # A url GDAL cannot open raises RasterioIOError, which titiler maps to 500
     # (it does not distinguish "missing" from other open failures).
-    response = client.get(
-        "/bbox/-10,-5,10,5", params={"url": "/tmp/does-not-exist-xyz.tif"}
-    )
+    missing = str(tmp_path / "does-not-exist.tif")
+    response = client.get("/bbox/-10,-5,10,5", params={"url": missing})
     assert response.status_code == 500, response.text
 
 
@@ -421,4 +469,4 @@ def test_bbox_rejects_crs_without_ogc_authority(
         "/bbox/-10,-5,10,5", params={"url": cog_path, "crs": "ESRI:54009"}
     )
     assert response.status_code == 400, response.text
-    assert "crs" in response.json()["detail"].lower()
+    assert "no OGC authority code" in response.json()["detail"]
