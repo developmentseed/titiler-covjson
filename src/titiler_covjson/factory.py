@@ -19,15 +19,19 @@ right status codes.
 # forward-reference hazard there. titiler's own factory omits it for the same
 # reason.
 
+import math
 from collections.abc import Callable
 from typing import Annotated, Any
 
 import rasterio
 from attrs import define
 from fastapi import Depends, Path
+from rasterio import windows
+from rasterio.io import DatasetReader
 from rio_tiler.constants import WGS84_CRS
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData, Info
+from rio_tiler.utils import get_vrt_transform
 from titiler.core.dependencies import (
     CRSParams,
     DatasetParams,
@@ -127,45 +131,22 @@ class CovJSONFactory(BaseFactory):
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
             _validate_bbox(minx, miny, maxx, maxy)
-
-            # Pre-read ceiling guard: when width and height are both given, the output
-            # cell count is known before reading, so reject an oversized request without
-            # allocating a huge array. Other paths are bounded by max_size and caught by
-            # the post-read backstop below.
-            if image_params.width and image_params.height:
-                _enforce_cell_ceiling(
-                    image_params.width,
-                    image_params.height,
-                    max_cells=self.max_cells,
-                    grid_label="Requested",
-                )
-
-            # When no sizing param is supplied, apply the downsampling default so a
-            # full-extent read is bounded. rio-tiler reads native at max_size=None, so
-            # the cap is applied here rather than inherited. This relies on
-            # PartFeatureParams carrying only sizing fields (max_size/height/width): an
-            # empty to_kwargs then means "no sizing requested". If a non-sizing field is
-            # ever added upstream, revisit so it does not defeat the default.
-            part_kwargs = to_kwargs(image_params) or {"max_size": self.default_max_size}
+            _validate_output_dimensions(image_params.width, image_params.height)
 
             read_crs, label_crs = _resolve_crs(crs)
+            _validate_label_crs(label_crs)
             band_kwargs = to_kwargs(band_params)
 
-            with self.reader(src_path) as src_dst:
-                info = src_dst.info()
-                _validate_band_indexes(band_kwargs.get("indexes"), info)
-                image = src_dst.part(
-                    (minx, miny, maxx, maxy),
-                    dst_crs=read_crs,
-                    bounds_crs=read_crs,
-                    **band_kwargs,
-                    **part_kwargs,
-                    **to_kwargs(dataset_params),
-                )
-
-            # Post-read backstop for every path not guarded pre-read.
-            _enforce_cell_ceiling(
-                image.width, image.height, max_cells=self.max_cells, grid_label="Output"
+            image, info = _read_bounded_image(
+                self.reader,
+                src_path,
+                (minx, miny, maxx, maxy),
+                read_crs=read_crs,
+                band_kwargs=band_kwargs,
+                image_params=image_params,
+                dataset_kwargs=to_kwargs(dataset_params),
+                default_max_size=self.default_max_size,
+                max_cells=self.max_cells,
             )
 
             grid_input = _build_grid_input(image, info, band_kwargs, label_crs)
@@ -176,6 +157,90 @@ class CovJSONFactory(BaseFactory):
                 content=coverage.model_dump_json(exclude_none=True),
                 headers=headers,
             )
+
+
+def _read_bounded_image(
+    reader: type[Reader],
+    src_path: str,
+    bounds: tuple[float, float, float, float],
+    *,
+    read_crs: rasterio.CRS,
+    band_kwargs: dict[str, Any],
+    image_params: PartFeatureParams,
+    dataset_kwargs: dict[str, Any],
+    default_max_size: int,
+    max_cells: int,
+) -> tuple[ImageData, Info]:
+    """Read ``bounds`` from ``src_path`` as an image, enforcing the cell ceiling.
+
+    Opens ``src_path``, reads the region (reprojecting to ``read_crs``), and
+    returns the image alongside the reader's dataset ``info``. An out-of-range
+    band index or an oversized output grid is rejected with ``BadRequestError``
+    via the guards this calls: the cell-count ceiling is checked before the read
+    when the output dimensions are known and again after as a backstop for the
+    ``max_size``-bounded paths.
+
+    When no sizing is requested, ``default_max_size`` caps the longest output
+    dimension so a full-extent read stays bounded; rio-tiler reads native at
+    ``max_size=None``, so the cap is applied here rather than inherited. This
+    relies on ``PartFeatureParams`` carrying only sizing fields, so an empty
+    ``to_kwargs`` means "no sizing requested"; revisit if a non-sizing field is
+    ever added upstream.
+
+    Args:
+        reader: The rio-tiler reader type used to open ``src_path``.
+        src_path: The dataset path or URL.
+        bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
+        read_crs: The CRS the bounds are expressed in and the read reprojects to.
+        band_kwargs: Band-selection keyword arguments for ``part`` (indexes or
+            expression).
+        image_params: The output-sizing parameters (max_size / width / height).
+        dataset_kwargs: Dataset-read keyword arguments for ``part`` (nodata,
+            unscale, resampling, reprojection).
+        default_max_size: The longest output dimension applied when no sizing is
+            requested.
+        max_cells: The hard cell-count ceiling.
+
+    Returns:
+        tuple[ImageData, Info]: The read image and the reader's dataset info.
+    """
+    part_kwargs = to_kwargs(image_params) or {"max_size": default_max_size}
+
+    with reader(src_path) as src_dst:
+        info = src_dst.info()
+        _validate_band_indexes(band_kwargs.get("indexes"), info)
+
+        # Reject an oversized grid before allocating the array, when the output
+        # dimensions are known pre-read (both requested, or one derived from the
+        # read window). A no-sizing request resolves to (None, None) and is left
+        # to the post-read backstop below.
+        grid_width, grid_height = _resolve_grid_dimensions(
+            src_dst.dataset,
+            bounds,
+            read_crs=read_crs,
+            width=image_params.width,
+            height=image_params.height,
+        )
+        if grid_width is not None and grid_height is not None:
+            _enforce_cell_ceiling(
+                grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
+            )
+
+        image = src_dst.part(
+            bounds,
+            dst_crs=read_crs,
+            bounds_crs=read_crs,
+            **band_kwargs,
+            **part_kwargs,
+            **dataset_kwargs,
+        )
+
+    # Backstop for the no-sizing path (bounded by max_size, not checked pre-read).
+    _enforce_cell_ceiling(
+        image.width, image.height, max_cells=max_cells, grid_label="Output"
+    )
+
+    return image, info
 
 
 def _validate_bbox(minx: float, miny: float, maxx: float, maxy: float) -> None:
@@ -201,6 +266,156 @@ def _validate_bbox(minx: float, miny: float, maxx: float, maxy: float) -> None:
     if minx >= maxx or miny >= maxy:
         msg = "Degenerate bbox: require minx < maxx and miny < maxy."
         raise BadRequestError(msg)
+
+
+def _validate_output_dimensions(width: int | None, height: int | None) -> None:
+    """Reject a non-positive explicit output ``width`` or ``height``.
+
+    ``PartFeatureParams`` does not constrain these to be positive, so ``?width=0``
+    or ``?width=-5`` reaches the read. A zero or negative dimension is a
+    degenerate grid rio-tiler cannot produce (it surfaces as an opaque 500), and
+    a zero would also be conflated with an absent dimension; rejecting it up
+    front turns it into an actionable 400.
+
+    Args:
+        width: The requested output width, or ``None``.
+        height: The requested output height, or ``None``.
+
+    Raises:
+        BadRequestError: If ``width`` or ``height`` is given and is less than 1.
+
+    Examples:
+        >>> _validate_output_dimensions(256, 128)
+        >>> _validate_output_dimensions(None, None)
+        >>> _validate_output_dimensions(0, 128)
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: width must be a positive integer; got 0.
+    """
+    for name, value in (("width", width), ("height", height)):
+        if value is not None and value < 1:
+            msg = f"{name} must be a positive integer; got {value}."
+            raise BadRequestError(msg)
+
+
+def _resolve_grid_dimensions(
+    dataset: DatasetReader,
+    bounds: tuple[float, float, float, float],
+    *,
+    read_crs: rasterio.CRS,
+    width: int | None,
+    height: int | None,
+) -> tuple[int, int] | tuple[None, None]:
+    """Resolve the output grid dimensions rio-tiler's ``part`` will produce.
+
+    Both dimensions given: returned unchanged. Exactly one given: rio-tiler
+    derives the other from the read window's aspect ratio and *upsamples* to the
+    requested value, so the missing dimension is computed here the same way,
+    letting the resulting cell count be checked against a ceiling before the
+    array is read (a lone ``width`` or ``height`` otherwise escapes both the
+    ``max_size`` downsampling default and a both-dimensions cell check, a
+    denial-of-service hazard). Neither given: the output is bounded by the
+    ``max_size`` default, so ``(None, None)`` is returned and the count is left
+    to a post-read check.
+
+    This mirrors the dimension derivation in ``rio_tiler.reader.part``; a test
+    locks the two in step, so a change to that derivation fails loudly rather
+    than silently defeating the cell-count check.
+
+    Args:
+        dataset: The open rasterio dataset, for the read-window geometry.
+        bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
+        read_crs: The Coordinate Reference System (CRS) the bounds are expressed
+            in and that the read reprojects to.
+        width: The requested output width, or ``None``.
+        height: The requested output height, or ``None``.
+
+    Returns:
+        tuple[int, int] | tuple[None, None]: The resolved ``(width, height)``,
+            or ``(None, None)`` when neither was requested.
+
+    Examples:
+        Both dimensions given returns them unchanged, and neither given returns
+        ``(None, None)``. Both cases short-circuit before the read window is
+        consulted, so ``dataset`` and ``bounds`` are unused (hence the
+        placeholder values below):
+
+        >>> _resolve_grid_dimensions(
+        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128
+        ... )
+        (256, 128)
+        >>> _resolve_grid_dimensions(
+        ...     None, (0, 0, 1, 1), read_crs=None, width=None, height=None
+        ... )
+        (None, None)
+
+        Only the lone-dimension case consults ``bounds``: the missing dimension
+        is derived from the read window's aspect ratio, so it needs an open
+        dataset and is not shown here.
+    """
+    if width is not None and height is not None:
+        return width, height
+
+    if width is None and height is None:
+        return None, None
+
+    # Match part's read-window aspect ratio: the reprojected VRT grid when the
+    # read reprojects, else the native window over the source transform.
+    if read_crs != dataset.crs:
+        _, window_width, window_height = get_vrt_transform(
+            dataset, bounds, height, width, dst_crs=read_crs
+        )
+    else:
+        window = windows.from_bounds(*bounds, transform=dataset.transform)
+        window_width, window_height = window.width, window.height
+
+    ratio = window_height / window_width
+
+    if width is not None:
+        return width, math.ceil(width * ratio)
+
+    # Exactly one dimension is set (guarded above) and it is not width, so height
+    # is set; mypy cannot see that correlation, hence the narrowing assert.
+    assert height is not None
+    return math.ceil(height / ratio), height
+
+
+def _validate_label_crs(crs: rasterio.CRS) -> None:
+    """Reject an output CRS that cannot be expressed as an OGC CRS URI.
+
+    The coverage identifies its Coordinate Reference System (CRS) by an OGC
+    Uniform Resource Identifier (URI), which requires a recognised authority
+    (such as EPSG). The ``crs`` request parameter accepts anything rasterio can
+    parse (Well-Known Text, PROJ strings, ESRI codes), so a CRS with no such
+    authority would otherwise reach the modeler and the response header, where
+    the URI lookup raises ``ValueError`` (an unhandled 500 for what is really
+    invalid input). Validating up front turns it into an actionable 400 before
+    the read.
+
+    Args:
+        crs: The output (label) CRS resolved from the request.
+
+    Raises:
+        BadRequestError: If ``crs`` has no OGC-URI-mappable authority code.
+
+    Examples:
+        >>> import rasterio
+        >>> _validate_label_crs(rasterio.CRS.from_epsg(4326))
+        >>> _validate_label_crs(rasterio.CRS.from_user_input("ESRI:54009"))
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Unsupported crs: the requested CRS
+        has no OGC authority code (such as EPSG) and cannot be expressed as a
+        CoverageJSON CRS URI.
+    """
+    try:
+        crs_to_ogc_uri(crs)
+    except ValueError:
+        msg = (
+            "Unsupported crs: the requested CRS has no OGC authority code (such "
+            "as EPSG) and cannot be expressed as a CoverageJSON CRS URI."
+        )
+        raise BadRequestError(msg) from None
 
 
 def _resolve_crs(requested: rasterio.CRS | None) -> tuple[rasterio.CRS, rasterio.CRS]:

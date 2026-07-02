@@ -122,8 +122,14 @@ inline in one JSON array, so output size is a first-class concern.
   aspect ratio) is applied, so a full-extent read does not emit an unbounded
   JSON document. This matches the 1024 default TiTiler uses for previews. The
   default is itself a configurable factory setting.
-- `width` / `height` force exact output dimensions; when either is set,
-  `max_size` does not apply (the `PartFeatureParams` rule).
+- `width` and `height` force exact output dimensions and must be supplied
+  together (or not at all); when both are set, `max_size` does not apply (the
+  `PartFeatureParams` rule). A lone `width` or `height` is rejected with `400`:
+  rio-tiler would derive the missing dimension from the bounds aspect ratio and
+  upsample to the requested value while ignoring `max_size`, escaping both the
+  downsampling default and the pre-read cell ceiling (a denial-of-service
+  hazard). Requiring the pair keeps every sized request's cell count knowable
+  before the read.
 - A factory-configurable **hard ceiling** bounds the resulting grid cell count
   (`width * height`). A request whose resolved output grid would exceed the
   ceiling is rejected with `400` and a message naming the limit. The ceiling is
