@@ -365,11 +365,15 @@ def _resolve_grid_dimensions(
         window = windows.from_bounds(*bounds, transform=dataset.transform)
         window_width, window_height = window.width, window.height
 
+    # Take the aspect ratio first, then multiply, matching part's exact float
+    # association so the derived dimension is bit-identical to what it produces.
+    ratio = window_height / window_width
+
     if width is not None:
-        return width, math.ceil(width * window_height / window_width)
+        return width, math.ceil(width * ratio)
 
     if height is not None:
-        return math.ceil(height * window_width / window_height), height
+        return math.ceil(height / ratio), height
 
     if max_size is None:
         return max(1, round(window_width)), max(1, round(window_height))
@@ -406,10 +410,13 @@ def _scale_to_max_size(
     if max(window_width, window_height) < max_size:
         return window_width, window_height
 
-    if window_height > window_width:
-        return math.ceil(max_size * window_width / window_height), max_size
+    # Same aspect-ratio-first association as part's _get_width_height.
+    ratio = window_height / window_width
 
-    return max_size, math.ceil(max_size * window_height / window_width)
+    if window_height > window_width:
+        return math.ceil(max_size / ratio), max_size
+
+    return max_size, math.ceil(max_size * ratio)
 
 
 def _validate_label_crs(crs: rasterio.CRS) -> None:
