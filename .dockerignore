@@ -1,0 +1,13 @@
+# Allowlist: ignore everything, then re-include only what the image build needs.
+# NOTE: to un-ignore files in a subdir you must un-ignore the DIR itself, not a
+# nested glob, because Docker will not descend into an excluded directory (so
+# the whole docker/ dir is re-included rather than cherry-picking app.py +
+# data/).
+# README.md + LICENSE are required: hatchling reads them to build the package.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src
+!docker

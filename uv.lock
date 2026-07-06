@@ -2012,6 +2012,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+demo = [
+    { name = "uvicorn" },
+]
 dev = [
     { name = "httpx" },
     { name = "jsonschema" },
@@ -2042,6 +2045,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+demo = [{ name = "uvicorn", specifier = ">=0.30" }]
 dev = [
     { name = "httpx" },
     { name = "jsonschema", specifier = ">=4.26.0" },

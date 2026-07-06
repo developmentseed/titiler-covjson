@@ -61,6 +61,11 @@ dev = [
     "types-jsonschema>=4.26.0.20260508",
     "uvicorn[standard]>=0.50.2",
 ]
+# uvicorn is a server, not a library runtime dependency, so it is scoped to this
+# demo-only group (used by the Docker image) and never enters
+# [project].dependencies. It is not in default-groups, so a plain `uv sync` does
+# not install it.
+demo = ["uvicorn>=0.30"]
 docs = ["mkdocs", "mkdocs-material"]
 
 [tool.hatch.build.targets.wheel]
