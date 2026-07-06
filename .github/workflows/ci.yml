@@ -147,3 +147,36 @@ jobs:
         run: uv run --quiet pytest --cov --cov-report=term-missing
       - name: Write coverage summary to the job summary
         run: uv run --quiet coverage report --format=markdown --show-missing >> "$GITHUB_STEP_SUMMARY"
+
+  # Prove the /bbox CoverageJSON slice end-to-end: guard the committed sample COG
+  # against drift, build the demo image, and assert the running endpoint returns
+  # valid, non-empty CoverageJSON. Two environments run here: the host uv env (dev
+  # deps for check_sample.py's rasterio/numpy and smoke.py's jsonschema) and the
+  # image's own no-dev runtime. Docker is preinstalled on ubuntu-latest, and the
+  # default shallow checkout is fine (the drift guard is history-independent).
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          cache-suffix: docker-smoke
+      - name: Install host dependencies
+        run: uv sync --locked --quiet
+      - name: Guard the committed sample COG against drift
+        run: uv run --quiet python docker/check_sample.py
+      - name: Build the demo image
+        run: docker build -f docker/Dockerfile -t titiler-covjson-demo .
+      - name: Run the demo container
+        run: docker run -d --name covjson-demo -p 8000:8000 titiler-covjson-demo
+      - name: Smoke-check the running endpoint
+        run: uv run --quiet python docker/smoke.py
+      - name: Stop the demo container
+        if: always()
+        run: docker rm -f covjson-demo
