@@ -86,7 +86,12 @@ def test_bbox_honors_explicit_crs(client: TestClient, cog_path: str) -> None:
     assert response.headers["content-crs"] == (
         "<http://www.opengis.net/def/crs/EPSG/0/4326>"
     )
-    assert response.json()["domain"]["domainType"] == "Grid"
+    body = response.json()
+    assert body["domain"]["domainType"] == "Grid"
+    # EPSG:4326's authority axis order is latitude, longitude, so referencing
+    # lists ["y", "x"]: per CovJSON the coordinates order must match the CRS
+    # axis order, and x still holds longitude, y latitude in the domain axes.
+    assert body["domain"]["referencing"][0]["coordinates"] == ["y", "x"]
 
 
 def test_bbox_selects_single_band_by_index(client: TestClient, cog_path: str) -> None:
