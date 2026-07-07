@@ -15,6 +15,9 @@ from titiler.core.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 
 from titiler_covjson.factory import CovJSONFactory
 
+# A local hot-reload development server for this same endpoint, pointing at an
+# arbitrary dataset, lives in examples/dev_app.py. Use this container for a
+# reproducible demo; use that for a fast local dev loop.
 app = FastAPI(
     title="titiler-covjson demo",
     description="Local demo: GET /bbox -> CoverageJSON. Not for public use.",

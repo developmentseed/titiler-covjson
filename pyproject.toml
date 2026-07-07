@@ -83,7 +83,7 @@ branch = true
 
 # No [tool.ruff] target-version: ruff infers it from project.requires-python.
 [tool.ruff]
-include = ["src/**/*.py", "tests/**/*.py", "docker/**/*.py"]
+include = ["src/**/*.py", "tests/**/*.py", "docker/**/*.py", "examples/**/*.py"]
 
 [tool.ruff.lint]
 preview = true
@@ -109,7 +109,7 @@ select = [
 ban-relative-imports = "all"
 
 [tool.mypy]
-files = ["src", "tests", "docker"]
+files = ["src", "tests", "docker", "examples"]
 # No python_version: mypy uses the running interpreter, and the CI typecheck
 # matrix runs it under every supported version (the lowest covers the
 # requires-python floor) -- so the version is not duplicated here.
