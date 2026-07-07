@@ -3,7 +3,7 @@
 Writes a small 2-band EPSG:4326 COG whose extent and band names mirror the
 endpoint's test fixtures, so requests use known-good coordinates. Run this
 module directly to (re)generate the committed fixture at
-``docker/data/sample.tif``; ``docker/check_sample.py`` guards it against drift.
+``docker/data/sample.tif``.
 """
 
 from pathlib import Path
@@ -19,10 +19,12 @@ HEIGHT = 24
 BLOCKSIZE = 16
 NODATA = -9999.0
 BAND_NAMES = ("red", "nir")
+# docker/check_sample.py guards this committed fixture against drift from this
+# generator.
 FIXTURE_PATH = Path(__file__).parent / "data" / "sample.tif"
 
 
-def write_sample_cog(path: str) -> None:
+def write_sample_cog(path: Path) -> None:
     """Write the demo sample COG to ``path``.
 
     Two ``float32`` bands over the extent ``(-10, -5, 10, 5)`` in EPSG:4326:
@@ -75,5 +77,5 @@ def write_sample_cog(path: str) -> None:
 
 if __name__ == "__main__":
     FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    write_sample_cog(str(FIXTURE_PATH))
+    write_sample_cog(FIXTURE_PATH)
     print(f"wrote {FIXTURE_PATH}")

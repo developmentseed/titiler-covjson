@@ -1,7 +1,7 @@
 """Guard the committed demo Cloud-Optimized GeoTIFF (COG) against drift.
 
 Regenerates the sample COG from ``write_sample_cog`` into a temporary file and
-asserts it matches the committed ``docker/data/sample.tif`` *semantically* --
+asserts it matches the committed ``docker/data/sample.tif`` *semantically*:
 band arrays and key profile fields, never raw bytes (GeoTIFF bytes vary across
 GDAL and libtiff versions, so a byte compare would be flaky). It also asserts
 the absolute expectations the format and endpoint rely on (the band
@@ -39,9 +39,9 @@ def main() -> int:
         return 1
 
     with tempfile.TemporaryDirectory() as tmp:
-        regen_path = str(Path(tmp) / "regen.tif")
+        regen_path = Path(tmp) / "regen.tif"
         write_sample_cog(regen_path)
-        problems = _compare(str(FIXTURE_PATH), regen_path)
+        problems = _compare(FIXTURE_PATH, regen_path)
 
     if problems:
         print(
@@ -64,7 +64,7 @@ def main() -> int:
     return 0
 
 
-def _compare(committed_path: str, regen_path: str) -> list[str]:
+def _compare(committed_path: Path, regen_path: Path) -> list[str]:
     """Collect semantic + absolute mismatches between two sample COGs.
 
     Args:
@@ -102,11 +102,14 @@ def _compare(committed_path: str, regen_path: str) -> list[str]:
         if not np.array_equal(committed.read(), regen.read()):
             problems.append("band arrays differ")
 
-        if committed.descriptions != BAND_NAMES:
-            problems.append(f"descriptions: {committed.descriptions} != {BAND_NAMES}")
+        if committed.descriptions != BAND_NAMES or regen.descriptions != BAND_NAMES:
+            problems.append(
+                f"descriptions: committed {committed.descriptions}, "
+                f"regen {regen.descriptions}, expected {BAND_NAMES}"
+            )
 
-        if not committed.overviews(1):
-            problems.append("band 1 has no overviews (not a COG with a pyramid)")
+        if not committed.overviews(1) or not regen.overviews(1):
+            problems.append("missing band-1 overviews (not a COG with a pyramid)")
 
     return problems
 
