@@ -2038,7 +2038,7 @@ requires-dist = [
     { name = "rio-tiler", specifier = ">=9.0,<10.0" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "titiler-core", specifier = ">=2.0,<3.0" },
-    { name = "ucumvert", specifier = ">=0.2.2" },
+    { name = "ucumvert", specifier = ">=0.3.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -2170,15 +2170,15 @@ wheels = [
 
 [[package]]
 name = "ucumvert"
-version = "0.3.1"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lark" },
     { name = "pint" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/4c/b0e949900f3b5c1e84bc8aa63d0c6687726985a58abda1a68146a4997dd1/ucumvert-0.3.1.tar.gz", hash = "sha256:8c287a71e453f79c822213239cf6873407b7363c6bca42f7418a1d56282c90c6", size = 52256, upload-time = "2025-12-04T09:42:01.762Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/e6/e8b7156399642c12ba9e5975d4481d827d0b67bc8574e9d89ff0fcfa3750/ucumvert-0.3.2.tar.gz", hash = "sha256:a3708a38120cf6617e792ac2eb3d610f269cd7b8e8ce52fd2f15a4e3fd76f9fb", size = 53211, upload-time = "2026-06-04T20:00:32.596Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/f7/44633e6317c569fa448aeed3a64c20482d7c802e2d4f18a1adf3826374b8/ucumvert-0.3.1-py3-none-any.whl", hash = "sha256:503b3cc3dfba7ec0c1b53a9692e74163e6d9dc5119422f8ff57f5a044fed0231", size = 53180, upload-time = "2025-12-04T09:42:00.288Z" },
+    { url = "https://files.pythonhosted.org/packages/75/3f/103f0c229a34c109e163abca0028daaf2ce91fb39b0240680d2053feb189/ucumvert-0.3.2-py3-none-any.whl", hash = "sha256:b1c3c5b875843642f52f5f015fc8728ff997ce9c337b64bd25141ae44848bdd0", size = 54227, upload-time = "2026-06-04T20:00:31.301Z" },
 ]
 
 [[package]]
