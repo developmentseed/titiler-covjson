@@ -15,6 +15,11 @@ Or point ``url`` at any rio-tiler-readable dataset of your own: a local COG, or
 an ``http(s)://`` / ``s3://`` asset href (e.g., one pulled from a STAC item):
 
     curl "http://127.0.0.1:8137/bbox/-10,-5,10,5?url=/path/to/your.tif&width=256&height=256"
+
+WARNING: strictly for local testing. The endpoint opens whatever ``url`` it is
+given (rio-tiler reads arbitrary local paths and remote URLs), making this an
+unauthenticated arbitrary-file-read and server-side request forgery surface.
+Never expose it publicly or on a shared network.
 """
 
 from fastapi import FastAPI

@@ -78,7 +78,7 @@ docker build -f docker/Dockerfile -t titiler-covjson-demo .
 Run it:
 
 ```bash
-docker run --rm -p 8000:8000 titiler-covjson-demo
+docker run --rm -p 127.0.0.1:8000:8000 titiler-covjson-demo
 ```
 
 Request a coverage for the bundled sample COG (the response is
@@ -90,11 +90,13 @@ curl "http://localhost:8000/bbox/-10,-5,10,5?url=/data/sample.tif&f=CoverageJSON
 
 ### Use your own COG
 
-Mount a directory holding your raster to a path that does not shadow the bundled
-`/data`, then point `url` at it:
+Mount the directory holding your raster read-only, at a path that does not
+shadow the bundled `/data`, then point `url` at it. Keep the mount as narrow as
+possible: the endpoint reads any path under it, so do not mount your home
+directory or any tree that holds secrets.
 
 ```bash
-docker run --rm -p 8000:8000 -v "$PWD:/host" titiler-covjson-demo
+docker run --rm -p 127.0.0.1:8000:8000 -v "/path/to/rasters:/host:ro" titiler-covjson-demo
 curl "http://localhost:8000/bbox/<minx>,<miny>,<maxx>,<maxy>?url=/host/your.tif&f=CoverageJSON"
 ```
 
