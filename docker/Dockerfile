@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# ---- builder: install the package + demo server into a venv ----
+# ---- builder: install the package + server into a venv ----
 # The uv image is itself based on python:3.13-slim-bookworm, so the venv it
 # builds is binary-compatible with the runtime stage below (same interpreter
 # path), letting the runtime copy the venv wholesale.
@@ -15,7 +15,7 @@ WORKDIR /app
 # Dependency layer first (cached across source edits): lock + manifest only, no
 # project install yet.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --group demo --no-install-project
+RUN uv sync --frozen --no-dev --group server --no-install-project
 
 # Then the package sources + metadata files hatchling needs, and install the
 # project itself. --no-editable: install into site-packages so the runtime stage
@@ -23,7 +23,7 @@ RUN uv sync --frozen --no-dev --group demo --no-install-project
 # runtime).
 COPY README.md LICENSE ./
 COPY src ./src
-RUN uv sync --frozen --no-dev --no-editable --group demo
+RUN uv sync --frozen --no-dev --no-editable --group server
 
 # ---- runtime: minimal image with just the venv + app + sample COG ----
 # Same Python minor AND Debian release (bookworm) as the builder base, so the
