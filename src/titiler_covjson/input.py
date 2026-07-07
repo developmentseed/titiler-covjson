@@ -4,9 +4,9 @@ Every endpoint in this package (tile, bbox, point, transect, time series)
 reads data through rio-tiler, but each read produces a different kind of
 result (``ImageData``, ``PointData``, values assembled across many STAC
 items), and none of those objects carries everything a CoverageJSON document
-needs -- band descriptions and units, timestamps, source geometry, or
+needs: band descriptions and units, timestamps, source geometry, or
 collection/item provenance. This module defines the per-domain input variants
-that carry it -- a shared base plus one frozen dataclass per domain
+that carry it: a shared base plus one frozen dataclass per domain
 (:class:`GridInput` now; Point and PointSeries variants follow), grouped under
 the :data:`CoverageInput` alias that endpoint code fills from whatever it read
 and that the modeler consumes to build covjson-pydantic ``Coverage`` objects.
@@ -45,7 +45,7 @@ class BandInfo:
     Describes what one band of a :class:`CoverageInput` data array means.
     The modeler turns each ``BandInfo`` into a CoverageJSON ``Parameter``
     (observed property plus unit) and uses ``dtype`` to pick the value type
-    of the band's range -- the CoverageJSON ``NdArray`` holding its values.
+    of the band's range (the CoverageJSON ``NdArray`` holding its values).
 
     Attributes:
         name: Band/variable identifier (e.g., ``"b1"``).
@@ -113,7 +113,7 @@ class _CoverageInputBase:
 
         Runs the variant's :meth:`_validate_shape`, then the domain-independent
         checks (no empty data axis, band count matching ``data.shape[0]``, unique
-        band names), then resolves ``bands`` -- synthesizing ``b1, b2, ...`` when
+        band names), then resolves ``bands``, synthesizing ``b1, b2, ...`` when
         empty (assigned via ``object.__setattr__``, as the dataclass is frozen),
         matching rio-tiler's default band naming.
 
@@ -128,7 +128,7 @@ class _CoverageInputBase:
 
         # No data axis may be empty: a zero-size band/height/width/sample axis is
         # a degenerate coverage and would otherwise surface as an opaque error
-        # deep in the modeler. (shape[0] == 0 -- zero bands -- is caught here too.)
+        # deep in the modeler. (The zero-band case, shape[0] == 0, is caught here.)
         if 0 in self.data.shape:
             msg = (
                 "CoverageInput data axes must all be non-empty; "
@@ -229,12 +229,10 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
     ``BandInfo.dtype`` is per-band, but ``info.dtype`` is a single
     dataset-level value, so every band here is assigned the same dtype.
     Sources with genuinely mixed-dtype bands (uncommon, but possible in
-    netCDF) are uniformized to that one dtype -- this loader cannot recover
-    per-band dtypes. That is acceptable for the single-array raster path; it
-    will need revisiting when heterogeneous STAC asset dtypes are combined
-    into one coverage (see ``docs/04-modeler-converter-design.md``, Section
-    3.1). Callers needing true per-band dtypes must build :class:`BandInfo`
-    entries directly rather than going through this helper.
+    netCDF) are uniformized to that one dtype. This loader cannot recover
+    per-band dtypes. That is acceptable for the single-array raster path.
+    Callers needing true per-band dtypes must build :class:`BandInfo` entries
+    directly rather than going through this helper.
 
     Args:
         info: A rio-tiler ``Info`` model, as returned by ``Reader.info()``.
@@ -258,6 +256,9 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
         >>> bands[1].description, bands[1].unit
         ('', '')
     """
+    # Uniform dataset-level dtype; per-band dtypes for heterogeneous STAC assets
+    # combined into one coverage are out of scope here (see
+    # docs/04-modeler-converter-design.md, Section 3.1).
     return [
         BandInfo(
             name=name,
@@ -383,9 +384,9 @@ def imagedata_to_coverage_input(
 
     This is the converter used by raster (grid) endpoints: tile, bbox, and
     overview reads all yield an ``ImageData``. The image's masked array is
-    passed through unchanged -- rio-tiler stores ``ImageData.array`` as a 3-D
+    passed through unchanged: rio-tiler stores ``ImageData.array`` as a 3-D
     ``(bands, height, width)`` masked array with nodata already encoded in
-    the mask -- so no further nodata handling is required here.
+    the mask, so no further nodata handling is required here.
 
     Band metadata is resolved with the following precedence: an explicit
     ``bands`` sequence; per-attribute overrides (``band_names``,

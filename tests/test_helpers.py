@@ -26,21 +26,21 @@ class TestCrsToOgcUri:
     # Success cases are tested in doctests for crs_to_ogc_uri.
 
     def test_no_authority_raises(self) -> None:
-        """Test that a CRS with no recognised authority raises ValueError."""
+        """Test that a CRS with no recognized authority raises ValueError."""
         crs = rasterio.CRS.from_proj4(
             "+proj=tmerc +lat_0=0 +lon_0=100 +k=0.9996 +x_0=500000 +y_0=0 +datum=WGS84"
         )
-        with pytest.raises(ValueError, match="no recognised authority code"):
+        with pytest.raises(ValueError, match="no recognized authority code"):
             crs_to_ogc_uri(crs)
 
     def test_unsupported_authority_raises(self) -> None:
-        """A recognised but unsupported authority (not EPSG/OGC) raises ValueError.
+        """A recognized but unsupported authority (not EPSG/OGC) raises ValueError.
 
         ESRI:54009 (World Mollweide) has no EPSG equivalent, so ``to_authority()``
-        returns ``("ESRI", ...)`` -- exercising the path where an authority *is*
+        returns ``("ESRI", ...)``, exercising the path where an authority *is*
         found but is absent from the supported URI templates.
         """
-        with pytest.raises(ValueError, match="no recognised authority code"):
+        with pytest.raises(ValueError, match="no recognized authority code"):
             crs_to_ogc_uri(rasterio.CRS.from_string("ESRI:54009"))
 
 
@@ -71,7 +71,7 @@ class TestNumpyDtypeToNdarray:
         assert nd.values[0] == 1.0
         assert math.isnan(nd.values[1])  # type: ignore[arg-type]
         assert nd.values[2] == 3.0
-        # model_dump_json() serialises the masked NaN as null, which is valid
+        # model_dump_json() serializes the masked NaN as null, which is valid
         # per the schema ("type": ["number", "null"]).
         assert_schema_valid(nd, "ndArray")
 
@@ -95,6 +95,27 @@ class TestNumpyDtypeToNdarray:
         assert isinstance(nd, NdArrayInt)
         assert nd.values is not None
         assert nd.values == [10, None, 30]
+        assert_schema_valid(nd, "ndArray")
+
+    def test_float_declared_over_integer_array(self) -> None:
+        """A float-declared band over integer data converts without crashing.
+
+        ``BandInfo.dtype`` defaults to ``float32`` while the underlying array
+        may be integer (the declared dtype is deliberately independent of the
+        array's own dtype), so the float branch must not assume a float array.
+        """
+        import math
+
+        arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.array(
+            [[1, 2], [3, 4]], dtype="int32", mask=[[True, False], [False, False]]
+        )
+        nd = numpy_dtype_to_ndarray(arr, np.float32, ["y", "x"])
+        assert isinstance(nd, NdArrayFloat)
+        assert nd.values is not None
+        masked = nd.values[0]
+        assert masked is not None
+        assert math.isnan(masked)  # the masked entry became NaN
+        assert nd.values[1:] == [2.0, 3.0, 4.0]
         assert_schema_valid(nd, "ndArray")
 
     @pytest.mark.parametrize(
@@ -141,6 +162,7 @@ class TestNumpyToCovjsonDtype:
             (np.uint16, "integer"),
             (np.uint32, "integer"),
             (np.uint64, "integer"),
+            (np.bool_, "integer"),
             (np.dtype("U10"), "string"),
             (np.dtype("S10"), "string"),
             (np.dtype("O"), "string"),
@@ -190,6 +212,6 @@ class TestCreateUnit:
         )
 
     def test_unknown_unit(self) -> None:
-        """Test that an unrecognised code returns None."""
+        """Test that an unrecognized code returns None."""
         assert create_unit("furlongs") is None
         assert create_unit("") is None

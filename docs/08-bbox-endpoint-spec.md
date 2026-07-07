@@ -51,16 +51,18 @@ GET {router_prefix}/bbox/{minx},{miny},{maxx},{maxy}
 
 ## 3. Request parameters
 
-All parameters are reused from `titiler.core` dependency-injectors except the
-EDR `parameter-name` alias, which is layered on top of band selection.
+Most parameters are reused from `titiler.core` dependency-injectors. Band
+selection is delivered by a first-party dependency, `CovJSONBandParams`, which
+layers the EDR `parameter-name` alias on top of the usual `bidx` / `expression`
+selectors and enforces their mutual exclusivity.
 
 | Parameter | Source | Default | Description |
 | --- | --- | --- | --- |
 | `url` | `DatasetPathParams` | required | Dataset URL (single dataset). |
 | `crs` | `CRSParams` | CRS84 | Single CRS knob: interprets the path bbox coordinates **and** the output coverage CRS (Section 4). |
-| `parameter-name` | EDR alias -> `BidxExprParams` | none | Band selection by name, comma-delimited (Section 6). Mutually exclusive with `bidx` and `expression`. |
-| `bidx` | `BidxExprParams` | all bands | Band selection by 1-based index. Mutually exclusive with `parameter-name` and `expression`. |
-| `expression` | `BidxExprParams` | none | rio-tiler band-math expression producing derived bands. Mutually exclusive with `parameter-name` and `bidx`. |
+| `parameter-name` | `CovJSONBandParams` (EDR alias) | none | Band selection by name, comma-delimited (Section 6). Mutually exclusive with `bidx` and `expression`. |
+| `bidx` | `CovJSONBandParams` | all bands | Band selection by 1-based index. Mutually exclusive with `parameter-name` and `expression`. |
+| `expression` | `CovJSONBandParams` | none | rio-tiler band-math expression producing derived bands. Mutually exclusive with `parameter-name` and `bidx`. |
 | `nodata` | `DatasetParams` | dataset value | Override the dataset nodata value; masked pixels serialize as `null`. |
 | `unscale` | `DatasetParams` | `false` | Apply the dataset's internal scale/offset to recover true physical values. |
 | `resampling` | `DatasetParams` | `nearest` | RasterIO resampling algorithm for the read. |
@@ -122,14 +124,20 @@ inline in one JSON array, so output size is a first-class concern.
   aspect ratio) is applied, so a full-extent read does not emit an unbounded
   JSON document. This matches the 1024 default TiTiler uses for previews. The
   default is itself a configurable factory setting.
-- `width` / `height` force exact output dimensions; when either is set,
-  `max_size` does not apply (the `PartFeatureParams` rule).
+- `width` and `height` force exact output dimensions; when either is set,
+  `max_size` does not apply (the `PartFeatureParams` rule). Each must be
+  positive; a zero or negative value is rejected with `400`. A lone `width` or
+  `height` is honored: rio-tiler derives the missing dimension from the read
+  window's aspect ratio, and the resulting grid is resolved and checked against
+  the ceiling before the read (see below), so it cannot upsample into an
+  unbounded allocation.
 - A factory-configurable **hard ceiling** bounds the resulting grid cell count
-  (`width * height`). A request whose resolved output grid would exceed the
-  ceiling is rejected with `400` and a message naming the limit. The ceiling is
-  enforced after the `width`/`height`/`max_size` resolution above, so it guards
-  explicit `width`/`height` oversizing (native reads are already bounded by the
-  `max_size` default).
+  (`width * height`). Before reading, the exact output dimensions rio-tiler will
+  produce are resolved from the sizing parameters and the read window (whether
+  from explicit `width`/`height`, a derived lone dimension, or a `max_size`
+  cap), and a grid that would exceed the ceiling is rejected with `400` naming
+  the limit. Because every sizing path is resolved pre-read, no oversized array
+  is allocated; a post-read check remains as defense-in-depth.
 
 Reduced-resolution Grid output is thus first-class: a caller downsamples simply
 by constraining `max_size` (or `width`/`height`).

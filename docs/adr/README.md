@@ -30,17 +30,17 @@ it never consumes a sequence number.
 
 Each ADR follows the lightweight template in [template.md](template.md):
 
-- **Title** -- `# ADR-NNNN: <decision>`.
-- **Status** -- one of `Proposed` (drafted and under review, e.g., in an open
+- **Title**: `# ADR-NNNN: <decision>`.
+- **Status**: one of `Proposed` (drafted and under review, e.g., in an open
   PR), `Accepted` (ratified and in force), `Rejected` (written up for the record
   but decided against), `Deprecated` (no longer relevant but not replaced by a
   specific successor), or `Superseded by ADR-NNNN` (replaced by a later
   decision). A `Proposed` ADR keeps its number from creation; it is not
   renumbered when accepted.
-- **Context** -- the forces at play; what made this a decision worth recording.
-- **Decision** -- what we chose, stated plainly.
-- **Alternatives considered** -- the real rejected options and why they lost.
-- **Consequences** -- what follows, including the costs we accept.
+- **Context**: the forces at play; what made this a decision worth recording.
+- **Decision**: what we chose, stated plainly.
+- **Alternatives considered**: the real rejected options and why they lost.
+- **Consequences**: what follows, including the costs we accept.
 
 Keep each ADR self-contained, and do not restate conventions already in CLAUDE.md.
 

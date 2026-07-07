@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyproj
 import rasterio
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.reference_system import (
@@ -63,7 +64,7 @@ _UCUM_CODE_TO_UNIT: dict[str, Unit] = {
     "cm/a": _ucum_unit("centimeters per year", "cm/a"),
     # Radiation / energy flux
     "W/m2": _ucum_unit("watts per square meter", "W/m2"),
-    # Surface density (e.g. snow water equivalent, soil moisture)
+    # Surface density (e.g., snow water equivalent, soil moisture)
     "kg/m2": _ucum_unit("kilograms per square meter", "kg/m2"),
     # Dimensionless
     "%": _ucum_unit("percent", "%"),
@@ -74,6 +75,14 @@ _UCUM_CODE_TO_UNIT: dict[str, Unit] = {
 def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionObject:
     """Create a 2-D spatial reference system connection object.
 
+    CovJSON lists ``referencing.coordinates`` in the CRS's declared axis order.
+    This project always emits ``x`` as easting/longitude and ``y`` as
+    northing/latitude (GDAL's traditional axis order), so a CRS whose first
+    declared axis is latitude/northing (e.g., ``EPSG:4326``) yields
+    ``["y", "x"]``, while a longitude/easting-first CRS (``CRS84``, projected
+    CRSs) yields ``["x", "y"]``. Only this metadata differs; the axis values are
+    unchanged.
+
     Args:
         crs: A rasterio CRS instance.
 
@@ -82,7 +91,7 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
             for the given CRS.
 
     Examples:
-        Create a reference for a Geographic CRS:
+        A longitude/latitude geographic CRS (``CRS84``) keeps ``["x", "y"]``:
 
         >>> ref = create_spatial_2d_reference(rasterio.CRS.from_string("OGC:CRS84"))
         >>> ref.coordinates
@@ -92,7 +101,16 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
         >>> ref.system.id
         'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
 
-        Create a reference for a Projected CRS:
+        A latitude/longitude geographic CRS (``EPSG:4326``) is ``["y", "x"]`` to
+        match its authority axis order:
+
+        >>> ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(4326))
+        >>> ref.coordinates
+        ['y', 'x']
+        >>> ref.system.id
+        'http://www.opengis.net/def/crs/EPSG/0/4326'
+
+        A projected CRS (easting/northing) keeps ``["x", "y"]``:
 
         >>> ref = create_spatial_2d_reference(rasterio.CRS.from_epsg(32637))
         >>> ref.coordinates
@@ -102,8 +120,17 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
         >>> ref.system.id
         'http://www.opengis.net/def/crs/EPSG/0/32637'
     """
+
+    # Read the CRS's declared axis order via pyproj (rasterio does not expose
+    # it). Go through WKT specifically: it preserves the authority axis order,
+    # whereas a proj4 representation would silently drop the axis order, always
+    # indicating lon/lat order.
+    axes = pyproj.CRS.from_wkt(crs.to_wkt()).axis_info
+    first_is_northing = axes[0].direction.lower() in ("north", "south")
+    coordinates = ["y", "x"] if first_is_northing else ["x", "y"]
+
     return ReferenceSystemConnectionObject(
-        coordinates=["x", "y"],
+        coordinates=coordinates,
         system=ReferenceSystem(
             type="GeographicCRS" if crs.is_geographic else "ProjectedCRS",
             id=crs_to_ogc_uri(crs),
@@ -185,13 +212,13 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
     """Convert a rasterio CRS object to an OGC URI reference.
 
     Args:
-        crs (rasterio.CRS): The coordinate reference system to convert.
+        crs: The coordinate reference system to convert.
 
     Returns:
         str: OGC URI string.
 
     Raises:
-        ValueError: If the CRS has no recognised authority code.
+        ValueError: If the CRS has no recognized authority code.
 
     Note:
         Supported authorities and their URI patterns:
@@ -212,7 +239,7 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
         if template := _AUTHORITY_URI_TEMPLATES.get(authority.upper()):
             return template.format(code)
 
-    msg = f"Cannot convert CRS {crs} to an OGC URI: no recognised authority code"
+    msg = f"Cannot convert CRS {crs} to an OGC URI: no recognized authority code"
     raise ValueError(msg)
 
 
@@ -225,13 +252,13 @@ def numpy_dtype_to_ndarray(
 
     Selects ``NdArrayFloat``, ``NdArrayInt``, or ``NdArrayStr`` based on `dtype`
     (the band's declared dtype, not necessarily the array's own dtype). Masked
-    values are serialised as ``NaN`` (float) or ``None`` (integer / string) per
+    values are serialized as ``NaN`` (float) or ``None`` (integer / string) per
     the CoverageJSON spec.
 
     Args:
         data: A 1-D or 2-D masked numpy array for a single band.
         dtype: The declared band dtype, used to select the NdArray subclass.
-        axis_names: Ordered axis labels, e.g. ``["y", "x"]`` for a 2-D grid or
+        axis_names: Ordered axis labels, e.g., ``["y", "x"]`` for a 2-D grid or
             ``["values"]`` for a 1-D profile.
 
     Returns:
@@ -254,7 +281,12 @@ def numpy_dtype_to_ndarray(
     shape = list(data.shape)
 
     if covjson_dtype == "float":
-        floats = data.filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call, unused-ignore]
+        # Cast to float before filling: `dtype` is the band's *declared* dtype,
+        # which may be float over an integer array (BandInfo.dtype defaults to
+        # float32). MaskedArray.filled casts the fill value to the array's own
+        # dtype, so filling an int array with NaN would raise; astype preserves
+        # the mask. Masked entries become NaN, which pydantic serializes as null.
+        floats = data.astype(np.float64).filled(np.nan).flatten().tolist()  # type: ignore[no-untyped-call, attr-defined, unused-ignore]
         return NdArrayFloat(values=floats, axisNames=list(axis_names), shape=shape)
 
     # For int/str, build a boolean mask array (never scalar).
@@ -274,7 +306,7 @@ def numpy_to_covjson_dtype(dtype: npt.DTypeLike) -> str:
     """Convert a numpy dtype to a CoverageJSON dtype string.
 
     Args:
-        dtype (np.dtype): The numpy dtype to convert.
+        dtype: The numpy dtype to convert.
 
     Returns:
         str: CoverageJSON dtype string ("float", "integer", or "string").
