@@ -81,6 +81,7 @@ branch = true
 preview = true
 select = [
     "B",
+    "D202",
     "DOC",
     "E",
     "EM",
