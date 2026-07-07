@@ -177,6 +177,9 @@ jobs:
         run: docker run -d --name covjson-demo -p 8000:8000 titiler-covjson-demo
       - name: Smoke-check the running endpoint
         run: uv run --quiet python docker/smoke.py
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs covjson-demo || true
       - name: Stop the demo container
         if: always()
-        run: docker rm -f covjson-demo
+        run: docker rm -f covjson-demo || true
