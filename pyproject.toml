@@ -59,6 +59,7 @@ dev = [
     "types-shapely>=2.1.0.20260508",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20260508",
+    "uvicorn[standard]>=0.50.2",
 ]
 docs = ["mkdocs", "mkdocs-material"]
 
