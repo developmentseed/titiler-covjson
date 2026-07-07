@@ -17,7 +17,7 @@ from covjson_pydantic.reference_system import (
     ReferenceSystemConnectionObject,
 )
 from covjson_pydantic.unit import Symbol, Unit
-from lark.exceptions import UnexpectedEOF, UnexpectedInput
+from lark.exceptions import LarkError
 from ucumvert import PintUcumRegistry
 
 if TYPE_CHECKING:
@@ -200,7 +200,7 @@ def create_unit(ucum_code: str) -> Unit | None:
         return curated
     try:
         quantity = _ureg.from_ucum(ucum_code)
-    except (UnexpectedInput, UnexpectedEOF):
+    except LarkError:
         return None
     return Unit(
         label={"en": f"{quantity.units:P}"},
