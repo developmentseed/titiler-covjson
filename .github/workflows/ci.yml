@@ -95,6 +95,12 @@ jobs:
       - name: Type-check (mypy)
         run: uv run --quiet mypy
 
+  # Test both ends of the dependency range (ADR-0002): `highest` (the committed
+  # lockfile, today's default) across the full Python matrix, plus one
+  # `lowest-direct` leg that resolves direct dependencies to their declared
+  # floors. lowest-direct runs only on the Python floor (python-versions[0])
+  # because the floors are chosen against that interpreter's available wheels;
+  # both resolutions are blocking, so a floor set too low turns the build red.
   test:
     needs: config
     runs-on: ubuntu-latest
@@ -103,6 +109,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ${{ fromJSON(needs.config.outputs.python-versions) }}
+        resolution: [highest]
+        # A single lowest-direct leg pinned to the Python floor; see the note
+        # above for why it is not crossed with the full matrix.
+        include:
+          - python-version: ${{ fromJSON(needs.config.outputs.python-versions)[0] }}
+            resolution: lowest-direct
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -113,8 +125,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - name: Install dependencies
+          # Namespace the cache per resolution so the highest and lowest-direct
+          # legs do not race to save an identical cache key.
+          cache-suffix: ${{ matrix.resolution }}
+      # `--resolution lowest-direct` re-resolves and cannot be combined with
+      # `--locked` (uv ignores the lockfile when the resolution mode changes),
+      # so each resolution has its own install step.
+      - name: Install dependencies (highest, from lockfile)
+        if: matrix.resolution == 'highest'
         run: uv sync --locked --quiet
+      - name: Install dependencies (lowest-direct floors)
+        if: matrix.resolution == 'lowest-direct'
+        run: uv sync --resolution lowest-direct --quiet
       - name: Run tests (pytest)
         run: uv run --quiet pytest
 
