@@ -48,3 +48,6 @@ Keep each ADR self-contained, and do not restate conventions already in CLAUDE.m
 
 - [ADR-0001](0001-covjson-http-api-direction.md) -- CoverageJSON HTTP API
   direction: EDR-vocabulary surface on a dedicated `BaseFactory` subclass
+- [ADR-0002](0002-dependency-floor-policy.md) -- Dependency floor policy:
+  deliberate, verified minimums (lowest-direct plus highest tested in CI,
+  Dependabot set to lockfile-only)
