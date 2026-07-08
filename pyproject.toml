@@ -24,14 +24,25 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    # Targets titiler.core's 2.x factory and dependency-injection API; <3.0
+    # guards the next breaking major.
     "titiler.core>=2.0,<3.0",
-    "rio-tiler>=9.0,<10.0",
+    # 9.0.1 fixes band selection by index (9.0.0 returns the first band
+    # regardless of the requested index); <10.0 guards the next major.
+    "rio-tiler>=9.0.1,<10.0",
+    # 0.8.0 is the first release providing the Polygon domain models; <1.0
+    # guards the still-evolving pre-1.0 model surface.
     "covjson-pydantic>=0.8.0,<1.0",
-    "numpy>=2.4.6",
-    "ucumvert>=0.3.2",
+    # Only basic array, dtype, and masked-array API is used; 2.0.0 is the first
+    # 2.x release and ships wheels for Python 3.11.
+    "numpy>=2.0.0",
+    # Only PintUcumRegistry and its invalid-code error are used, both present
+    # since 0.3.0.
+    "ucumvert>=0.3.0",
     # CRS axis-order introspection (rasterio does not expose it); used to emit
-    # CovJSON referencing.coordinates in the CRS's declared axis order.
-    "pyproj>=3.0,<4.0",
+    # CovJSON referencing.coordinates in the CRS's declared axis order. 3.4.0 is
+    # the lowest release with wheels for Python 3.11; <4.0 guards the next major.
+    "pyproj>=3.4.0,<4.0",
 ]
 
 [project.urls]
