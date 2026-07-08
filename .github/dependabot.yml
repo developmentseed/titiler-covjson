@@ -18,6 +18,13 @@ updates:
 
   - package-ecosystem: uv
     directory: /
+    # Refresh uv.lock (including dev-tooling) on upstream releases, but never
+    # rewrite the version bounds in pyproject.toml. Our runtime floors are the
+    # library's compatibility contract and must rise only by deliberate
+    # decision, not be ratcheted up on every dependency release (see issue #45).
+    # Caveat: under lockfile-only, uv-ecosystem Dependabot leaves transitive
+    # lock entries stale; a periodic `uv lock --upgrade` covers that if needed.
+    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
     # See the cooldown note above; only `default-days` applies to the uv
