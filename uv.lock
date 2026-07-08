@@ -1984,21 +1984,21 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "mypy" },
-    { name = "prek" },
+    { name = "mypy", specifier = ">=2.1" },
+    { name = "prek", specifier = ">=0.4" },
     { name = "pytest", specifier = ">=7.0" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
+    { name = "pytest-asyncio", specifier = ">=1.0" },
+    { name = "pytest-cov", specifier = ">=7.0" },
+    { name = "ruff", specifier = ">=0.15" },
     { name = "types-jsonschema", specifier = ">=4.26.0.20260508" },
     { name = "uvicorn", specifier = ">=0.50.2" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
+    { name = "mkdocs", specifier = ">=1.6,<2" },
+    { name = "mkdocs-material", specifier = ">=9.6,<10" },
 ]
 server = [{ name = "uvicorn", specifier = ">=0.50.2" }]
 

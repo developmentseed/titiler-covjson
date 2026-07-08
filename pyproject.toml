@@ -47,14 +47,20 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+# Lower bounds so `uv sync --resolution lowest-direct` (used in CI to test the
+# runtime floors) does not drag this tooling down to unbuildable ancient releases
+# (e.g., mkdocs 0.10, which imports the removed `imp` module). The mkdocs upper
+# bounds keep the docs toolchain on its current, mutually compatible majors
+# (mkdocs 1.x with mkdocs-material 9.x). All dev-only; no effect on the runtime
+# compatibility contract.
 dev = [
     "pytest>=7.0",
-    "pytest-cov",
-    "pytest-asyncio",
-    "httpx",
-    "ruff",
-    "mypy",
-    "prek",
+    "pytest-cov>=7.0",
+    "pytest-asyncio>=1.0",
+    "httpx>=0.28",
+    "ruff>=0.15",
+    "mypy>=2.1",
+    "prek>=0.4",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20260508",
     { include-group = "server" },
@@ -67,7 +73,7 @@ dev = [
 # `uv sync --no-dev` install never pulls it; `dev` includes it and layers the
 # [standard] extra (watchfiles/uvloop/httptools) for `--reload`.
 server = ["uvicorn>=0.50.2"]
-docs = ["mkdocs", "mkdocs-material"]
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.6,<10"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/titiler_covjson"]
