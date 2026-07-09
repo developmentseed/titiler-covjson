@@ -8,17 +8,21 @@ from typing import Any
 import numpy as np
 import pytest
 import rasterio
-from rio_tiler.models import ImageData, Info
+from rio_tiler.models import ImageData, Info, PointData
 
 from titiler_covjson.input import (
     BandInfo,
     GridInput,
+    PointInput,
+    Position,
     band_info_from_reader_info,
     imagedata_to_coverage_input,
+    pointdata_to_coverage_input,
 )
 
 BOUNDS = (-10.0, -5.0, 10.0, 5.0)
-CRS = rasterio.CRS.from_epsg(3857)
+CRS_EPSG_3857 = rasterio.CRS.from_epsg(3857)
+POSITION = Position(1.0, 2.0)
 
 
 def make_image(
@@ -37,10 +41,31 @@ def make_image(
     if array is None:
         array = np.arange(32, dtype="float32").reshape(2, 4, 4)
 
-    kwargs.setdefault("crs", CRS)
+    kwargs.setdefault("crs", CRS_EPSG_3857)
     kwargs.setdefault("bounds", BOUNDS)
 
     return ImageData(array, **kwargs)
+
+
+def make_point(
+    array: np.ndarray[Any, np.dtype[Any]] | None = None,
+    **kwargs: Any,
+) -> PointData:
+    """Build a PointData with a CRS by default.
+
+    Args:
+        array: Source array; defaults to a 2-band (2,) float32 array.
+        kwargs: Extra PointData keyword arguments.
+
+    Returns:
+        PointData: The assembled point.
+    """
+    if array is None:
+        array = np.arange(2, dtype="float32")
+
+    kwargs.setdefault("crs", CRS_EPSG_3857)
+
+    return PointData(array, **kwargs)
 
 
 def masked_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> GridInput:
@@ -52,7 +77,19 @@ def masked_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> GridInput:
     Returns:
         GridInput: An input with default bounds and CRS.
     """
-    return GridInput(data=data, bounds=BOUNDS, crs=CRS)
+    return GridInput(data=data, bounds=BOUNDS, crs=CRS_EPSG_3857)
+
+
+def point_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> PointInput:
+    """Build a minimal PointInput around the given array.
+
+    Args:
+        data: The masked data array, shaped ``(bands,)``.
+
+    Returns:
+        PointInput: An input with a default position and CRS.
+    """
+    return PointInput(data=data, position=POSITION, crs=CRS_EPSG_3857)
 
 
 class TestBandInfo:
@@ -101,7 +138,7 @@ class TestGridInput:
             GridInput(
                 data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
                 bounds=BOUNDS,
-                crs=CRS,
+                crs=CRS_EPSG_3857,
                 bands=(BandInfo("b1"),),
             )
 
@@ -110,7 +147,7 @@ class TestGridInput:
         cov = GridInput(
             data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
             bounds=BOUNDS,
-            crs=CRS,
+            crs=CRS_EPSG_3857,
             bands=(BandInfo("b1"), BandInfo("b2")),
         )
 
@@ -122,7 +159,7 @@ class TestGridInput:
             GridInput(
                 data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
                 bounds=BOUNDS,
-                crs=CRS,
+                crs=CRS_EPSG_3857,
                 bands=(BandInfo("x"), BandInfo("x")),
             )
 
@@ -149,7 +186,7 @@ class TestBandSynthesis:
         cov = GridInput(
             data=np.ma.MaskedArray(np.zeros((2, 2, 2))),
             bounds=BOUNDS,
-            crs=CRS,
+            crs=CRS_EPSG_3857,
             bands=bands,
         )
 
@@ -174,7 +211,7 @@ class TestImagedataToCoverageInput:
 
         assert cov.data is img.array
         assert cov.bounds == BOUNDS
-        assert cov.crs == CRS
+        assert cov.crs == CRS_EPSG_3857
         assert isinstance(cov.bands, tuple)
         assert [band.name for band in cov.bands] == ["b1", "b2"]
         assert all(band.dtype == np.dtype("float32") for band in cov.bands)
@@ -378,3 +415,168 @@ class TestBandInfoFromReaderInfo:
 
         assert [band.name for band in cov.bands] == ["b1", "b2"]
         assert [band.unit for band in cov.bands] == ["mm", ""]
+
+
+class TestPosition:
+    """Test the Position value type."""
+
+    def test_minimal_construction(self) -> None:
+        """x and y are required; z defaults to None."""
+        pos = Position(1.5, -2.5)
+
+        assert pos.x == 1.5
+        assert pos.y == -2.5
+        assert pos.z is None
+
+    def test_optional_z(self) -> None:
+        """A vertical coordinate is carried when supplied."""
+        pos = Position(1.5, -2.5, z=100.0)
+
+        assert pos.z == 100.0
+
+    @pytest.mark.parametrize(
+        ("x", "y", "z"),
+        [
+            (float("nan"), 2.0, None),
+            (float("inf"), 2.0, None),
+            (1.0, float("-inf"), None),
+            (1.0, 2.0, float("nan")),
+            (1.0, 2.0, float("inf")),
+        ],
+        ids=("x-nan", "x-inf", "y-neg-inf", "z-nan", "z-inf"),
+    )
+    def test_non_finite_coordinate_raises(
+        self, x: float, y: float, z: float | None
+    ) -> None:
+        """A NaN or infinite x, y, or z is rejected at construction."""
+        with pytest.raises(ValueError, match="must be finite"):
+            Position(x, y, z=z)
+
+    def test_frozen(self) -> None:
+        """Position is immutable."""
+        pos = Position(1.5, -2.5)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            pos.x = 0.0  # type: ignore[misc]
+
+
+class TestPointInput:
+    """Test the PointInput dataclass."""
+
+    def test_minimal_construction(self) -> None:
+        """A 1-D masked array with a position and CRS is sufficient."""
+        cov = point_input(np.ma.MaskedArray(np.zeros(2)))
+
+        # bands is resolved at construction, so it is never empty afterwards.
+        assert [band.name for band in cov.bands] == ["b1", "b2"]
+        assert cov.position == POSITION
+        assert cov.collection_id is None
+        assert cov.item_ids is None
+
+    @pytest.mark.parametrize(
+        "shape",
+        [(2, 1), (2, 3), (2, 1, 1), ()],
+        ids=("2D-column", "2D", "3D", "0D"),
+    )
+    def test_non_1d_data_raises(self, shape: tuple[int, ...]) -> None:
+        """PointInput requires 1-D (bands,) data."""
+        with pytest.raises(ValueError, match="Point data must have shape"):
+            point_input(np.ma.MaskedArray(np.zeros(shape)))
+
+    def test_band_count_mismatch_raises(self) -> None:
+        """A non-empty bands tuple must match data.shape[0]."""
+        with pytest.raises(ValueError, match="does not match"):
+            PointInput(
+                data=np.ma.MaskedArray(np.zeros(2)),
+                position=POSITION,
+                crs=CRS_EPSG_3857,
+                bands=(BandInfo("b1"),),
+            )
+
+    def test_duplicate_band_names_raises(self) -> None:
+        """Band names become CovJSON keys, so they must be unique."""
+        with pytest.raises(ValueError, match="unique"):
+            PointInput(
+                data=np.ma.MaskedArray(np.zeros(2)),
+                position=POSITION,
+                crs=CRS_EPSG_3857,
+                bands=(BandInfo("x"), BandInfo("x")),
+            )
+
+    def test_empty_data_axis_raises(self) -> None:
+        """A zero-size band axis is rejected early."""
+        with pytest.raises(ValueError, match="non-empty"):
+            point_input(np.ma.MaskedArray(np.zeros(0)))
+
+    def test_frozen(self) -> None:
+        """PointInput is immutable."""
+        cov = point_input(np.ma.MaskedArray(np.zeros(2)))
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cov.data = np.ma.MaskedArray(np.zeros(2))  # type: ignore[misc]
+
+
+class TestPointdataToCoverageInput:
+    """Test conversion from rio-tiler PointData."""
+
+    def test_basic_conversion(self) -> None:
+        """Array (unchanged, no reshape), position, CRS, names, and dtype carry over."""
+        point = make_point()
+        cov = pointdata_to_coverage_input(point, position=POSITION)
+
+        assert cov.data is point.array
+        assert cov.data.shape == (2,)
+        assert cov.position == POSITION
+        assert cov.crs == CRS_EPSG_3857
+        assert [band.name for band in cov.bands] == ["b1", "b2"]
+        assert all(band.dtype == np.dtype("float32") for band in cov.bands)
+
+    def test_mask_propagation(self) -> None:
+        """Masked entries in the source array survive conversion."""
+        arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.MaskedArray(
+            np.ones(2, dtype="float32"), mask=[True, False]
+        )
+        cov = pointdata_to_coverage_input(make_point(arr), position=POSITION)
+        cov_mask = np.ma.getmaskarray(cov.data)
+
+        assert cov_mask[0]
+        assert not cov_mask[1]
+        assert cov.data[1] == 1.0
+
+    def test_bands_kwarg_applied(self) -> None:
+        """An explicit bands sequence is stored as a tuple, entries unchanged."""
+        bands = [BandInfo("a", description="alpha"), BandInfo("b", unit="m")]
+        cov = pointdata_to_coverage_input(make_point(), position=POSITION, bands=bands)
+
+        assert cov.bands == tuple(bands)
+
+    def test_missing_crs_raises(self) -> None:
+        """A point without a CRS is rejected."""
+        with pytest.raises(ValueError, match="no CRS"):
+            pointdata_to_coverage_input(make_point(crs=None), position=POSITION)
+
+    def test_crs_kwarg_overrides(self) -> None:
+        """An explicit crs= kwarg wins over (or substitutes for) point.crs."""
+        wgs84 = rasterio.CRS.from_epsg(4326)
+        substituted = pointdata_to_coverage_input(
+            make_point(crs=None), position=POSITION, crs=wgs84
+        )
+        overridden = pointdata_to_coverage_input(
+            make_point(), position=POSITION, crs=wgs84
+        )
+
+        assert substituted.crs == wgs84
+        assert overridden.crs == wgs84
+
+    def test_falsy_crs_override_is_honored(self) -> None:
+        """A non-None but falsy crs= override wins, rather than point.crs.
+
+        An empty ``rasterio.CRS()`` is falsy, so a truthiness-based fallback
+        would silently discard it in favor of ``point.crs``; the explicit
+        override must be honored instead.
+        """
+        empty = rasterio.CRS()
+        cov = pointdata_to_coverage_input(make_point(), position=POSITION, crs=empty)
+
+        assert cov.crs == empty
+        assert cov.crs != CRS_EPSG_3857
