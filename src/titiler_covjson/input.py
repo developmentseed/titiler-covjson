@@ -452,7 +452,6 @@ def imagedata_to_coverage_input(
           fill_value=-9999.0,
           dtype=float32)
     """
-
     if img.bounds is None:
         msg = "ImageData has no bounds; cannot build a CoverageInput"
         raise ValueError(msg)

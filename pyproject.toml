@@ -92,6 +92,7 @@ include = ["src/**/*.py", "tests/**/*.py", "docker/**/*.py", "examples/**/*.py"]
 preview = true
 select = [
     "B",
+    "D202",
     "DOC",
     "E",
     "EM",

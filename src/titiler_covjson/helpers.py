@@ -120,7 +120,6 @@ def create_spatial_2d_reference(crs: rasterio.CRS) -> ReferenceSystemConnectionO
         >>> ref.system.id
         'http://www.opengis.net/def/crs/EPSG/0/32637'
     """
-
     # Read the CRS's declared axis order via pyproj (rasterio does not expose
     # it). Go through WKT specifically: it preserves the authority axis order,
     # whereas a proj4 representation would silently drop the axis order, always
@@ -232,7 +231,6 @@ def crs_to_ogc_uri(crs: rasterio.CRS) -> str:
         >>> crs_to_ogc_uri(rasterio.CRS.from_string("OGC:CRS84"))
         'http://www.opengis.net/def/crs/OGC/1.3/CRS84'
     """
-
     if (authority_info := crs.to_authority()) is not None:
         authority, code = authority_info
 
@@ -276,7 +274,6 @@ def numpy_dtype_to_ndarray(
         >>> nd.values
         [1.5, 2.5, 3.5, 4.5]
     """
-
     covjson_dtype = numpy_to_covjson_dtype(dtype)
     shape = list(data.shape)
 
