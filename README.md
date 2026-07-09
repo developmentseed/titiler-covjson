@@ -112,18 +112,6 @@ uv run python docker/make_sample_cog.py
 `docker/check_sample.py` guards the committed file against drifting from its
 generator.
 
-## Dependencies
-
-- [TiTiler](https://developmentseed.org/titiler/) (`titiler.core`) >= 2.0, < 3.0
-- [rio-tiler](https://cogeotiff.github.io/rio-tiler/) >= 9.0, < 10.0
-- [covjson-pydantic](https://github.com/KNMI/covjson-pydantic) >= 0.8.0, < 1.0
-  (Pydantic v2 CoverageJSON models by KNMI)
-- [Shapely](https://shapely.readthedocs.io/) >= 2.0
-- [NumPy](https://numpy.org/) >= 2.2.6
-- [ucumvert](https://github.com/dalito/ucumvert) >= 0.2.2 (UCUM (Unified Code
-  for Units of Measure) parsing)
-- [pyproj](https://pyproj4.github.io/pyproj/) >= 3.0, < 4.0
-
 ## Documentation
 
 See the [`docs/`](docs/) directory. The current-direction documents are the
