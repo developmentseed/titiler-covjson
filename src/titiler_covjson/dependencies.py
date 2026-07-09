@@ -215,6 +215,56 @@ def validate_covjson_format(
         raise BadRequestError(msg)
 
 
+def reject_vertical_selection(
+    z: Annotated[
+        str | None,
+        Query(description="Vertical level. Not supported by this 2-D endpoint."),
+    ] = None,
+) -> None:
+    """Reject a vertical (``z``) selection on a 2-D point endpoint.
+
+    A single 2-D raster has no vertical dimension to sample, so honoring or
+    silently dropping a requested vertical level would be dishonest. Point
+    sampling therefore rejects a ``z`` selection outright. This runs as a FastAPI
+    dependency for its side effect alone (it returns nothing): the host
+    application's titiler exception handlers render the raised error as a 400
+    response.
+
+    Args:
+        z: The requested vertical level, or ``None`` when unspecified.
+
+    Raises:
+        BadRequestError: If ``z`` is a non-empty value.
+
+    Examples:
+        An absent or empty ``z`` is accepted (the validator returns ``None``),
+        matching the empty-is-absent convention of the other selectors:
+
+        >>> reject_vertical_selection() is None
+        True
+        >>> reject_vertical_selection("") is None
+        True
+
+        A requested vertical level is rejected:
+
+        >>> reject_vertical_selection("850")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Vertical selection is not ...
+    """
+    # Reject on truthiness, not `is not None`: a valueless `?z=` normalizes to
+    # "no vertical selection" (accepted), matching validate_covjson_format's
+    # `if f and ...` and CovJSONBandParams' `x or None`. The 2-D backing cannot
+    # sample a vertical level; see docs/adr/0001-covjson-http-api-direction.md.
+    if z:
+        msg = (
+            "Vertical selection is not supported by this endpoint: it samples a "
+            "single 2-D raster, which has no vertical dimension. Remove the `z` "
+            "parameter."
+        )
+        raise BadRequestError(msg)
+
+
 def _band_name_to_index(name: str) -> int:
     """Map a rio-tiler band identifier (``b1``, ``b2``, ...) to a 1-based index.
 

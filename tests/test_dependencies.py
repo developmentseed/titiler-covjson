@@ -3,6 +3,7 @@ from titiler.core.errors import BadRequestError
 
 from titiler_covjson.dependencies import (
     CovJSONBandParams,
+    reject_vertical_selection,
     to_kwargs,
     validate_covjson_format,
 )
@@ -71,3 +72,16 @@ def test_format_coveragejson_accepted_case_insensitive(value: str) -> None:
     # not raise. (Rejection of other values is covered by the dependencies.py
     # doctest and the route test in test_factory.py.)
     validate_covjson_format(value)
+
+
+def test_reject_vertical_selection_rejects_present_z() -> None:
+    with pytest.raises(BadRequestError, match="Vertical selection is not"):
+        reject_vertical_selection("850")
+
+
+@pytest.mark.parametrize("z", ["", None], ids=["empty", "absent"])
+def test_reject_vertical_selection_accepts_absent_z(z: str | None) -> None:
+    # Empty-is-absent: a valueless ?z= normalizes to "no vertical selection",
+    # matching the other selectors' empty-is-absent handling. No exception means
+    # accepted (the None return is covered by the dependencies.py doctest).
+    reject_vertical_selection(z)
