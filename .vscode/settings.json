@@ -1,0 +1,15 @@
+{
+  // This project formats and lints with Ruff (CI runs `ruff format --check`).
+  // The formatter MUST be scoped under "[python]": a bare top-level
+  // "editor.defaultFormatter" here does not override a user-level
+  // "[python]" default formatter, because language-specific settings always
+  // win over general ones regardless of workspace-vs-user scope.
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+  // Use the Ruff pinned in the project environment (via uv) so editor
+  // formatting matches CI exactly, rather than the extension's bundled Ruff.
+  // Drop this if the extension cannot locate the environment's ruff.
+  "ruff.importStrategy": "fromEnvironment"
+}

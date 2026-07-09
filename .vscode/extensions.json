@@ -1,0 +1,23 @@
+{
+  // Extensions recommended for this project. VS Code surfaces these via
+  // "Extensions: Show Recommended Extensions" and offers to install them.
+  "recommendations": [
+    // Formatter and linter. CI runs `ruff format --check` and `ruff check`,
+    // so this keeps editor formatting/linting identical to CI.
+    "charliermarsh.ruff",
+    // Strict type checking. CI runs `mypy`.
+    "ms-python.mypy-type-checker",
+    // Core Python support: interpreter selection, test and debug integration
+    // (the committed launch.json debug configs rely on it).
+    "ms-python.python"
+  ],
+  // This project uses Ruff for both formatting and import sorting, so these
+  // would fight it (e.g., inserting blank lines Ruff does not, or reordering
+  // imports differently). Marked not-recommended for this workspace only; this
+  // does not disable or uninstall anything already installed.
+  "unwantedRecommendations": [
+    "ms-python.black-formatter",
+    "ms-python.autopep8",
+    "ms-python.isort"
+  ]
+}
