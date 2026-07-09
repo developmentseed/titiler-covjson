@@ -7,9 +7,10 @@ items), and none of those objects carries everything a CoverageJSON document
 needs: band descriptions and units, timestamps, source geometry, or
 collection/item provenance. This module defines the per-domain input variants
 that carry it: a shared base plus one frozen dataclass per domain
-(:class:`GridInput` now; Point and PointSeries variants follow), grouped under
-the :data:`CoverageInput` alias that endpoint code fills from whatever it read
-and that the modeler consumes to build covjson-pydantic ``Coverage`` objects.
+(:class:`GridInput` and :class:`PointInput` now; a PointSeries variant follows),
+grouped under the :data:`CoverageInput` alias that endpoint code fills from
+whatever it read and that the modeler consumes to build covjson-pydantic
+``Coverage`` objects.
 
 Keeping this intermediate layer separate buys three things: the modeler never
 depends on rio-tiler types, changes to the rio-tiler API are contained to the
@@ -292,10 +293,11 @@ class PointInput(_CoverageInputBase):
             raise ValueError(msg)
 
 
-# Alias for the per-domain input union. Currently a single member; the point
-# variants (PointInput, PointSeriesInput) join it in #23, at which point the
-# modeler's `match` gains cases and `assert_never` enforces exhaustiveness.
-CoverageInput = GridInput
+# Alias for the per-domain input union. GridInput and PointInput are both
+# members (the EDR /position slice, #44); the modeler's `match` dispatches on
+# each, and `assert_never` in its default arm enforces exhaustiveness as further
+# variants (e.g., PointSeriesInput) join.
+CoverageInput = GridInput | PointInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:

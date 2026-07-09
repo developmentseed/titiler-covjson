@@ -254,10 +254,12 @@ def numpy_dtype_to_ndarray(
     the CoverageJSON spec.
 
     Args:
-        data: A 1-D or 2-D masked numpy array for a single band.
+        data: A masked numpy array for a single band. Any rank is accepted: 0-D
+            for a single sampled value (a Point range), 1-D for a profile, or
+            2-D for a grid; ``shape`` is taken from the array.
         dtype: The declared band dtype, used to select the NdArray subclass.
-        axis_names: Ordered axis labels, e.g., ``["y", "x"]`` for a 2-D grid or
-            ``["values"]`` for a 1-D profile.
+        axis_names: Ordered axis labels, e.g., ``["y", "x"]`` for a 2-D grid,
+            ``["values"]`` for a 1-D profile, or ``[]`` for a 0-D scalar.
 
     Returns:
         NdArrayFloat | NdArrayInt | NdArrayStr: A CoverageJSON range object with

@@ -10,11 +10,11 @@ import pytest
 import rasterio
 from conftest import assert_schema_valid
 from covjson_pydantic.coverage import Coverage
-from covjson_pydantic.domain import CompactAxis, DomainType
+from covjson_pydantic.domain import CompactAxis, DomainType, ValuesAxis
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.unit import Symbol
 
-from titiler_covjson.input import BandInfo, GridInput
+from titiler_covjson.input import BandInfo, GridInput, PointInput, Position
 from titiler_covjson.modeler import to_coverage
 
 
@@ -225,6 +225,162 @@ class TestGridCoverage:
         """A projected CRS yields ProjectedCRS referencing in the domain."""
         data = _masked([[[1.0, 2.0]]], dtype="float32")
         cov = to_coverage(_grid_input(data, crs=rasterio.CRS.from_epsg(32637)))
+
+        assert cov.domain.referencing is not None
+        system = cov.domain.referencing[0].system
+        assert system.type == "ProjectedCRS"
+        assert system.id == "http://www.opengis.net/def/crs/EPSG/0/32637"
+        assert_schema_valid(cov)
+
+
+def _point_input(
+    data: np.ma.MaskedArray[Any, np.dtype[Any]],
+    *,
+    position: Position | None = None,
+    bands: tuple[BandInfo, ...] = (),
+    crs: rasterio.CRS | None = None,
+) -> PointInput:
+    """Build a PointInput for modeler tests.
+
+    Args:
+        data: The masked data array, shaped ``(bands,)`` (one value per band).
+        position: The sampled location; defaults to ``Position(-5.0, 2.5)``.
+        bands: Per-band metadata; empty to let PointInput synthesize it.
+        crs: CRS for the input; defaults to EPSG:4326 (WGS84).
+
+    Returns:
+        PointInput: A point input at a fixed WGS84 location.
+    """
+    return PointInput(
+        data=data,
+        position=position or Position(-5.0, 2.5),
+        crs=crs or rasterio.CRS.from_epsg(4326),
+        bands=bands,
+    )
+
+
+class TestPointCoverage:
+    """Conversion of point (single-position) inputs to a Point Coverage."""
+
+    def test_single_band_float_point_is_schema_valid(self) -> None:
+        """A single-band float point converts to a schema-valid Point Coverage."""
+        data = _masked([1.5], dtype="float32")
+        cov = to_coverage(_point_input(data, bands=(BandInfo("b1", unit="mm"),)))
+
+        assert isinstance(cov, Coverage)
+        assert cov.domain.domainType == DomainType.point
+
+        # A Point domain carries single-value x/y axes at the sampled location
+        # (no z when the position is purely horizontal).
+        assert isinstance(cov.domain.axes.x, ValuesAxis)
+        assert cov.domain.axes.x.values == [-5.0]
+        assert isinstance(cov.domain.axes.y, ValuesAxis)
+        assert cov.domain.axes.y.values == [2.5]
+        assert cov.domain.axes.z is None
+
+        assert set(cov.ranges) == {"b1"}
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayFloat)
+        assert nd.axisNames == []
+        assert nd.shape == []
+        assert nd.values == [1.5]
+
+        assert_schema_valid(cov)
+
+    def test_masked_float_value_serializes_as_null(self) -> None:
+        """A masked float sample serializes as JSON null in the range values."""
+        data = _masked([1.5], mask=[True], dtype="float32")
+        cov = to_coverage(_point_input(data, bands=(BandInfo("b1"),)))
+
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        assert dumped["ranges"]["b1"]["values"] == [None]
+        assert_schema_valid(cov)
+
+    def test_multiple_bands_keep_order_and_names(self) -> None:
+        """Each band yields a scalar parameter and range keyed by its name."""
+        data = _masked([10.0, 20.0], dtype="float32")
+        cov = to_coverage(_point_input(data, bands=(BandInfo("red"), BandInfo("nir"))))
+
+        assert cov.parameters is not None
+        assert list(cov.parameters.root) == ["red", "nir"]
+        assert list(cov.ranges) == ["red", "nir"]
+        red = cov.ranges["red"]
+        assert isinstance(red, NdArrayFloat)
+        assert red.shape == []
+        assert red.values == [10.0]
+        assert_schema_valid(cov)
+
+    def test_integer_nodata_serializes_as_null(self) -> None:
+        """A masked integer sample serializes as JSON null."""
+        data = _masked([10, 20], mask=[False, True], dtype="int16")
+        cov = to_coverage(
+            _point_input(
+                data,
+                bands=(
+                    BandInfo("b1", dtype="int16"),
+                    BandInfo("b2", dtype="int16"),
+                ),
+            )
+        )
+
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayInt)
+        assert nd.values == [10]
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        assert dumped["ranges"]["b2"]["values"] == [None]
+        assert_schema_valid(cov)
+
+    def test_string_dtype_produces_string_range(self) -> None:
+        """A string-dtype band produces an NdArrayStr scalar range."""
+        data = _masked(["a"], dtype=np.dtype("U1"))
+        cov = to_coverage(
+            _point_input(data, bands=(BandInfo("b1", dtype=np.dtype("U1")),))
+        )
+
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayStr)
+        assert nd.values == ["a"]
+        assert_schema_valid(cov)
+
+    def test_resolved_unit_is_attached(self) -> None:
+        """A resolvable UCUM code becomes the parameter's unit."""
+        data = _masked([1.5], dtype="float32")
+        cov = to_coverage(
+            _point_input(data, bands=(BandInfo("b1", description="precip", unit="mm"),))
+        )
+
+        assert cov.parameters is not None
+        param = cov.parameters.root["b1"]
+        assert param.observedProperty.label == {"en": "precip"}
+        assert param.unit is not None
+        assert isinstance(param.unit.symbol, Symbol)
+        assert param.unit.symbol.value == "mm"
+        assert_schema_valid(cov)
+
+    def test_vertical_position_adds_z_axis(self) -> None:
+        """A 3-D position adds a single-value z axis, still schema-valid.
+
+        The modeler models an optional vertical coordinate even though the
+        endpoint does not yet expose 3-D sampling: the model layer is ready for
+        a 3-D backing behind the reader seam.
+        """
+        data = _masked([1.5], dtype="float32")
+        cov = to_coverage(
+            _point_input(
+                data,
+                position=Position(-5.0, 2.5, z=850.0),
+                bands=(BandInfo("b1"),),
+            )
+        )
+
+        assert isinstance(cov.domain.axes.z, ValuesAxis)
+        assert cov.domain.axes.z.values == [850.0]
+        assert_schema_valid(cov)
+
+    def test_projected_crs_referencing(self) -> None:
+        """A projected CRS yields ProjectedCRS referencing in the domain."""
+        data = _masked([1.0], dtype="float32")
+        cov = to_coverage(_point_input(data, crs=rasterio.CRS.from_epsg(32637)))
 
         assert cov.domain.referencing is not None
         system = cov.domain.referencing[0].system
