@@ -2029,6 +2029,9 @@ docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
 ]
+server = [
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2053,12 +2056,14 @@ dev = [
     { name = "ruff" },
     { name = "types-jsonschema", specifier = ">=4.26.0.20260508" },
     { name = "types-shapely", specifier = ">=2.1.0.20260508" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.50.2" },
+    { name = "uvicorn", specifier = ">=0.50.2" },
+    { name = "uvicorn", extras = ["standard"] },
 ]
 docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
 ]
+server = [{ name = "uvicorn", specifier = ">=0.50.2" }]
 
 [[package]]
 name = "tomli"

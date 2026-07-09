@@ -59,8 +59,16 @@ dev = [
     "types-shapely>=2.1.0.20260508",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20260508",
-    "uvicorn[standard]>=0.50.2",
+    { include-group = "server" },
+    "uvicorn[standard]",
 ]
+# ASGI server for running the example apps over HTTP: installed into the Docker
+# image (which the CI smoke test builds and exercises) and used to serve the
+# local example app. uvicorn is a server, not a library runtime dependency, so
+# it stays out of [project].dependencies. Not in default-groups, so a
+# `uv sync --no-dev` install never pulls it; `dev` includes it and layers the
+# [standard] extra (watchfiles/uvloop/httptools) for `--reload`.
+server = ["uvicorn>=0.50.2"]
 docs = ["mkdocs", "mkdocs-material"]
 
 [tool.hatch.build.targets.wheel]
@@ -77,6 +85,9 @@ source = ["src/titiler_covjson"]
 branch = true
 
 # No [tool.ruff] target-version: ruff infers it from project.requires-python.
+[tool.ruff]
+include = ["src/**/*.py", "tests/**/*.py", "docker/**/*.py", "examples/**/*.py"]
+
 [tool.ruff.lint]
 preview = true
 select = [
@@ -101,7 +112,7 @@ select = [
 ban-relative-imports = "all"
 
 [tool.mypy]
-files = ["src", "tests"]
+files = ["src", "tests", "docker", "examples"]
 # No python_version: mypy uses the running interpreter, and the CI typecheck
 # matrix runs it under every supported version (the lowest covers the
 # requires-python floor) -- so the version is not duplicated here.

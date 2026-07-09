@@ -57,6 +57,61 @@ comma-delimited path segment, interpreted in CRS84 by default):
 curl "http://localhost:8000/bbox/-10,-5,10,5?url=/path/to/cog.tif"
 ```
 
+## Run it with Docker
+
+A small demo container serves the `/bbox` endpoint against a bundled sample
+Cloud-Optimized GeoTIFF (COG), so you can try the format end to end without
+building your own application.
+
+> **Local demo only.** This container serves an open `/bbox` endpoint that reads
+> whatever `url` you pass it, with no authentication. Run it on your own machine
+> for testing and confirmation; do not expose it publicly or on a shared
+> network.
+
+Build the image from the repository root (the trailing `.` build context is
+required, because the image installs the package from `src/`):
+
+```bash
+docker build -f docker/Dockerfile -t titiler-covjson-demo .
+```
+
+Run it:
+
+```bash
+docker run --rm -p 127.0.0.1:8000:8000 titiler-covjson-demo
+```
+
+Request a coverage for the bundled sample COG (the response is
+`application/prs.coverage+json`; pipe to `jq` for readable output):
+
+```bash
+curl "http://localhost:8000/bbox/-10,-5,10,5?url=/data/sample.tif&f=CoverageJSON"
+```
+
+### Use your own COG
+
+Mount the directory holding your raster read-only, at a path that does not
+shadow the bundled `/data`, then point `url` at it. Keep the mount as narrow as
+possible: the endpoint reads any path under it, so do not mount your home
+directory or any tree that holds secrets.
+
+```bash
+docker run --rm -p 127.0.0.1:8000:8000 -v "/path/to/rasters:/host:ro" titiler-covjson-demo
+curl "http://localhost:8000/bbox/<minx>,<miny>,<maxx>,<maxy>?url=/host/your.tif&f=CoverageJSON"
+```
+
+### The bundled sample
+
+`docker/data/sample.tif` is a small, committed COG generated deterministically
+by `docker/make_sample_cog.py`; reproduce it with:
+
+```bash
+uv run python docker/make_sample_cog.py
+```
+
+`docker/check_sample.py` guards the committed file against drifting from its
+generator.
+
 ## Dependencies
 
 - [TiTiler](https://developmentseed.org/titiler/) (`titiler.core`) >= 2.0, < 3.0
