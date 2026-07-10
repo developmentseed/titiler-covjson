@@ -24,15 +24,25 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    # Targets titiler.core's 2.x factory and dependency-injection API; <3.0
+    # guards the next breaking major.
     "titiler.core>=2.0,<3.0",
-    "rio-tiler>=9.0,<10.0",
+    # 9.0.1 fixes band selection by index (9.0.0 returns the first band
+    # regardless of the requested index); <10.0 guards the next major.
+    "rio-tiler>=9.0.1,<10.0",
+    # 0.8.0 is the first release providing the Polygon domain models; <1.0
+    # guards the still-evolving pre-1.0 model surface.
     "covjson-pydantic>=0.8.0,<1.0",
-    "shapely>=2.0",
-    "numpy>=2.4.6",
-    "ucumvert>=0.3.2",
+    # Only basic array, dtype, and masked-array API is used; 2.0.0 is the first
+    # 2.x release and ships wheels for Python 3.11.
+    "numpy>=2.0.0",
+    # Only PintUcumRegistry and its invalid-code error are used, both present
+    # since 0.3.0.
+    "ucumvert>=0.3.0",
     # CRS axis-order introspection (rasterio does not expose it); used to emit
-    # CovJSON referencing.coordinates in the CRS's declared axis order.
-    "pyproj>=3.0,<4.0",
+    # CovJSON referencing.coordinates in the CRS's declared axis order. 3.4.0 is
+    # the lowest release with wheels for Python 3.11; <4.0 guards the next major.
+    "pyproj>=3.4.0,<4.0",
 ]
 
 [project.urls]
@@ -48,15 +58,20 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+# Lower bounds so `uv sync --resolution lowest-direct` (used in CI to test the
+# runtime floors) does not drag this tooling down to unbuildable ancient releases
+# (e.g., mkdocs 0.10, which imports the removed `imp` module). The mkdocs upper
+# bounds keep the docs toolchain on its current, mutually compatible majors
+# (mkdocs 1.x with mkdocs-material 9.x). All dev-only; no effect on the runtime
+# compatibility contract.
 dev = [
     "pytest>=7.0",
-    "pytest-cov",
-    "pytest-asyncio",
-    "httpx",
-    "ruff",
-    "mypy",
-    "prek",
-    "types-shapely>=2.1.0.20260508",
+    "pytest-cov>=7.0",
+    "pytest-asyncio>=1.0",
+    "httpx>=0.28",
+    "ruff>=0.15",
+    "mypy>=2.1",
+    "prek>=0.4",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20260508",
     { include-group = "server" },
@@ -69,7 +84,7 @@ dev = [
 # `uv sync --no-dev` install never pulls it; `dev` includes it and layers the
 # [standard] extra (watchfiles/uvloop/httptools) for `--reload`.
 server = ["uvicorn>=0.50.2"]
-docs = ["mkdocs", "mkdocs-material"]
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.6,<10"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/titiler_covjson"]
