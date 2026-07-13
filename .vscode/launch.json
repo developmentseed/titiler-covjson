@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Dev: titiler-covjson /bbox (uvicorn)",
+      "name": "Dev: titiler-covjson API (uvicorn)",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
