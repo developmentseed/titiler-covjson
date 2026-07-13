@@ -424,8 +424,60 @@ def test_bbox_rejects_subpixel_thin_bbox(
     assert "too thin to sample" in response.json()["detail"]
 
 
+def test_bbox_rejects_subpixel_thin_reprojected_bbox(
+    client: TestClient, wide_cog_path: str
+) -> None:
+    # Reproject-path analogue of test_bbox_rejects_subpixel_thin_bbox. Reprojected
+    # onto the ~2 km/px source grid, a 10 m EPSG:3857 x-span is a tiny fraction of
+    # one source pixel, so it is too thin to sample and must be rejected (400) on
+    # the reproject path too, not just the same-CRS path.
+    response = client.get(
+        "/bbox/0,-500000,10,500000",
+        params={"url": wide_cog_path, "crs": "epsg:3857"},
+    )
+    assert response.status_code == 400, response.text
+    assert "too thin to sample" in response.json()["detail"]
+
+
+def test_bbox_serves_reprojected_bbox_that_rounds_to_one_pixel(
+    client: TestClient, wide_cog_path: str
+) -> None:
+    # The serve side of the too-thin check: a box that resolves to a 1-px-wide
+    # destination strip is still served as long as it covers at least half a
+    # source pixel. A 1600 m EPSG:3857 x-span is ~0.8 of a source pixel (the
+    # source is ~2 km/px), so it must be served (200, x.num == 1), not rejected
+    # like the sub-pixel 10 m box above.
+    response = client.get(
+        "/bbox/0,-500000,1600,500000",
+        params={"url": wide_cog_path, "crs": "epsg:3857"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["domain"]["axes"]["x"]["num"] == 1
+
+
+def test_bbox_serves_narrow_reprojected_bbox_on_global_dataset(
+    client: TestClient, global_cog_path: str
+) -> None:
+    # Regression: a source reaching the poles makes get_vrt_transform clamp the
+    # latitude to +/-85.06 before deriving the destination grid, so the whole-
+    # dataset destination resolution differs from an unclamped estimate. Measuring
+    # the box's thinness against the source pixel grid avoids that mismatch. This
+    # equatorial ~40 km box floors to a 1-px-wide destination window but is a valid
+    # multi-source-pixel read, so it must be served (200), not falsely rejected.
+    response = client.get(
+        "/bbox/0,0,40000,2000000",
+        params={"url": global_cog_path, "crs": "epsg:3857"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["domain"]["domainType"] == "Grid"
+
+
 _FULL_BOUNDS = (-10.0, -5.0, 10.0, 5.0)  # 16x16 source -> square read window
 _TALL_BOUNDS = (-10.0, -5.0, 0.0, 5.0)  # narrow in x, full in y -> taller window
+# The reproject rows read in EPSG:3857 meters, so a degree-valued box there is
+# sub-pixel (and now rejected); use a real multi-pixel box inside the source's
+# 3857 footprint (~+/-1.11e6 m x, +/-5.57e5 m y) to test sizing parity.
+_BOUNDS_3857 = (-1_000_000.0, -500_000.0, 1_000_000.0, 500_000.0)
 
 
 @pytest.mark.parametrize(
@@ -433,10 +485,10 @@ _TALL_BOUNDS = (-10.0, -5.0, 0.0, 5.0)  # narrow in x, full in y -> taller windo
     [
         (_FULL_BOUNDS, 4326, 40, None, None),
         (_FULL_BOUNDS, 4326, None, 30, None),
-        (_FULL_BOUNDS, 3857, 40, None, None),
-        (_FULL_BOUNDS, 3857, None, 30, None),
+        (_BOUNDS_3857, 3857, 40, None, None),
+        (_BOUNDS_3857, 3857, None, 30, None),
         (_FULL_BOUNDS, 4326, None, None, 8),
-        (_FULL_BOUNDS, 3857, None, None, 8),
+        (_BOUNDS_3857, 3857, None, None, 8),
         (_FULL_BOUNDS, 4326, None, None, 5000),
         (_FULL_BOUNDS, 4326, None, None, None),
         (_TALL_BOUNDS, 4326, None, None, 10),

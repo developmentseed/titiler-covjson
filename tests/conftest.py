@@ -124,6 +124,25 @@ def tiny_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     return path
 
 
+@pytest.fixture(scope="session")
+def global_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Write a 1440x720 global EPSG:4326 COG spanning the full ``+/-90`` latitude.
+
+    Reprojecting a source that reaches the poles to Web Mercator forces rio-tiler
+    to clamp the latitude to ``+/-85.06`` before deriving the destination grid, so
+    the whole-dataset destination resolution differs from an unclamped estimate.
+    This fixture exercises that path (the ``+/-5`` degree fixtures never do).
+    Session-scoped.
+
+    Returns:
+        str: Filesystem path to the written COG.
+    """
+    path = str(tmp_path_factory.mktemp("data") / "global.tif")
+    _write_cog(path, width=1440, height=720, bounds=(-180.0, -90.0, 180.0, 90.0))
+
+    return path
+
+
 @pytest.fixture
 def client() -> TestClient:
     """Return a TestClient over an app mounting a default CovJSONFactory.
@@ -233,22 +252,27 @@ def _make_client(
 
 
 def _write_cog(
-    path: str, *, width: int, height: int, band1_unit: str | None = None
+    path: str,
+    *,
+    width: int,
+    height: int,
+    bounds: tuple[float, float, float, float] = (-10.0, -5.0, 10.0, 5.0),
+    band1_unit: str | None = None,
 ) -> None:
     """Write a 2-band EPSG:4326 GeoTIFF: a band-1 ramp and a band-2 nodata copy.
 
     Band 1 is ``0 .. width*height-1`` reshaped row-major; band 2 copies it and
-    sets the top-left pixel to the nodata sentinel. The extent is fixed at
+    sets the top-left pixel to the nodata sentinel. The extent defaults to
     ``(-10, -5, 10, 5)``, so pixel size scales with the requested dimensions.
 
     Args:
         path: Destination filesystem path.
         width: Raster width in pixels.
         height: Raster height in pixels.
+        bounds: The geographic extent ``(minx, miny, maxx, maxy)`` in EPSG:4326.
         band1_unit: When set, a ``units`` GDAL tag written on band 1 (so the
             unit-resolution path can be exercised).
     """
-    bounds = (-10.0, -5.0, 10.0, 5.0)
     nodata = -9999.0
     transform = rasterio.transform.from_bounds(*bounds, width, height)
     band1 = np.arange(width * height, dtype="float32").reshape(height, width)

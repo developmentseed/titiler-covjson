@@ -32,6 +32,7 @@ from attrs import define
 from fastapi import Depends, Path, Query
 from rasterio import windows
 from rasterio.io import DatasetReader
+from rasterio.warp import transform_bounds
 from rio_tiler.constants import WGS84_CRS
 from rio_tiler.errors import PointOutsideBounds
 from rio_tiler.expression import get_expression_blocks
@@ -555,10 +556,10 @@ def _resolve_grid_dimensions(
         tuple[int, int]: The resolved ``(width, height)``.
 
     Raises:
-        BadRequestError: If neither dimension is given and the bounding box is
-            too thin to sample (a read-window axis rounds to zero). The host
-            application's titiler exception handlers render this as a 400
-            response.
+        BadRequestError: If neither dimension is given and the bounding box
+            spans less than half a source pixel in an axis (too thin to sample).
+            The host application's titiler exception handlers render this as a
+            400 response.
 
     Examples:
         Both dimensions given are returned unchanged; this is the only case that
@@ -580,9 +581,11 @@ def _resolve_grid_dimensions(
     if width is not None and height is not None:
         return width, height
 
+    reprojecting = read_crs != dataset.crs
+
     # Match part's read window: the reprojected VRT grid when the read
     # reprojects, else the native window over the source transform.
-    if read_crs != dataset.crs:
+    if reprojecting:
         _, window_width, window_height = get_vrt_transform(
             dataset, bounds, height, width, dst_crs=read_crs
         )
@@ -600,10 +603,19 @@ def _resolve_grid_dimensions(
     if height is not None:
         return math.ceil(height / ratio), height
 
-    # A box thinner than half a source pixel in an axis rounds that read-window
-    # axis to zero: it cannot be sampled, and rio-tiler's own max_size scaling
-    # would divide by zero on it. Reject it here, before the read, as bad input.
-    if round(window_width) < 1 or round(window_height) < 1:
+    # Neither dimension was given, so reject a box too thin to sample: one
+    # covering less than half a source pixel in an axis has no data to sample and
+    # would read as a single value stretched across the extent. Measure the box on
+    # the source pixel grid (reprojecting the bounds to the source CRS first when
+    # the read reprojects), which is uniform at every latitude. The destination
+    # grid is not: rio-tiler clamps its resolution near the poles, so measuring
+    # there would misjudge ordinary reads of a global dataset.
+    source_bounds = (
+        transform_bounds(read_crs, dataset.crs, *bounds) if reprojecting else bounds
+    )
+    source_window = windows.from_bounds(*source_bounds, transform=dataset.transform)
+
+    if round(source_window.width) < 1 or round(source_window.height) < 1:
         msg = (
             "Bounding box is too thin to sample: it spans less than half a source "
             "pixel in one dimension. Widen the box, or request an explicit width "
