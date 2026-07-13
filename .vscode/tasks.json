@@ -10,6 +10,17 @@
         "reveal": "silent",
         "panel": "shared"
       }
+    },
+    {
+      "label": "docker: run demo",
+      "detail": "Build the demo image and serve the bundled sample on :8000 (mirrors CI).",
+      "type": "shell",
+      "command": "docker build -f docker/Dockerfile -t titiler-covjson-demo . && docker run --rm -p 8000:8000 titiler-covjson-demo",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
     }
   ]
 }
