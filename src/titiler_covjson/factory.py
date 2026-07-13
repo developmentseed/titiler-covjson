@@ -1,10 +1,12 @@
-"""CoverageJSON factory: a titiler.core BaseFactory subclass owning /bbox.
+"""CoverageJSON factory: a titiler.core BaseFactory subclass owning the routes.
 
-Serves a single dataset as a 2-D CoverageJSON Grid coverage over
-``GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}``, reusing titiler's
-dependency-injectors for the dataset path, band selection, dataset options, and
-output sizing. It reads a bounded region with rio-tiler and funnels the result
-through the model layer to a CoverageJSON response.
+Serves a single dataset as CoverageJSON over two routes: a 2-D Grid coverage for
+a bounding box (``GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}``) and a Point
+coverage for a single position (``GET {prefix}/position?coords=POINT(x y)``),
+reusing titiler's dependency-injectors for the dataset path, band selection,
+dataset options, and (for the bounding box) output sizing. It reads with
+rio-tiler and funnels the result through the model layer to a CoverageJSON
+response.
 
 Mount it with ``app.include_router(CovJSONFactory().router)``. The host
 application must also install titiler's exception handlers
@@ -21,18 +23,20 @@ right status codes.
 
 import dataclasses
 import math
+import re
 from collections.abc import Callable
 from typing import Annotated, Any
 
 import rasterio
 from attrs import define
-from fastapi import Depends, Path
+from fastapi import Depends, Path, Query
 from rasterio import windows
 from rasterio.io import DatasetReader
 from rio_tiler.constants import WGS84_CRS
+from rio_tiler.errors import PointOutsideBounds
 from rio_tiler.expression import get_expression_blocks
 from rio_tiler.io import Reader
-from rio_tiler.models import ImageData, Info
+from rio_tiler.models import ImageData, Info, PointData
 from rio_tiler.utils import get_vrt_transform
 from titiler.core.dependencies import (
     CRSParams,
@@ -45,14 +49,19 @@ from titiler.core.factory import BaseFactory
 
 from titiler_covjson.dependencies import (
     CovJSONBandParams,
+    reject_vertical_selection,
     to_kwargs,
     validate_covjson_format,
 )
 from titiler_covjson.helpers import crs_to_ogc_uri
 from titiler_covjson.input import (
+    BandInfo,
     GridInput,
+    PointInput,
+    Position,
     band_info_from_reader_info,
     imagedata_to_coverage_input,
+    pointdata_to_coverage_input,
 )
 from titiler_covjson.modeler import to_coverage
 from titiler_covjson.responses import CovJSONResponse
@@ -64,17 +73,29 @@ DEFAULT_MAX_SIZE = 1024
 # authority order) even though both denote the same positions.
 CRS84 = rasterio.CRS.from_string("OGC:CRS84")
 
+# WKT for a point: `POINT`, an optional Z/M/ZM tag, then whitespace-separated
+# coordinates in parentheses. _parse_point_wkt inspects the tag and coordinate
+# count to reject 3-D/measured geometries; the comma (the MULTIPOINT coordinate
+# separator) is deliberately not allowed inside a single point.
+_POINT_WKT = re.compile(
+    r"^\s*POINT\s*(?P<tag>Z|M|ZM)?\s*\(\s*(?P<coords>[^()]*?)\s*\)\s*$",
+    re.IGNORECASE,
+)
+
 
 @define(kw_only=True)
 class CovJSONFactory(BaseFactory):
-    """Serve a single dataset as a CoverageJSON Grid over ``/bbox``.
+    """Serve a single dataset as CoverageJSON over ``/bbox`` and ``/position``.
 
-    Collaborators are constructor fields (the composition root): the reader and
-    the titiler dependency-injectors for path, band selection, dataset options,
-    and output sizing. Two sizing knobs are configurable: ``default_max_size``,
-    the longest output dimension applied when no sizing is requested (a request
-    still succeeds, just coarser), and ``max_cells``, a hard ceiling on the
-    output cell count that rejects an oversized request.
+    ``/bbox`` returns a Grid coverage for a bounding box; ``/position`` returns a
+    Point coverage for a single position. Collaborators are constructor fields
+    (the composition root): the reader and the titiler dependency-injectors for
+    path, band selection, dataset options, and output sizing. Two sizing knobs
+    are configurable (they bound the ``/bbox`` read; ``/position`` samples a
+    single cell and needs no sizing): ``default_max_size``, the longest output
+    dimension applied when no sizing is requested (a request still succeeds, just
+    coarser), and ``max_cells``, a hard ceiling on the output cell count that
+    rejects an oversized request.
     """
 
     reader: type[Reader] = Reader
@@ -106,7 +127,7 @@ class CovJSONFactory(BaseFactory):
         super().__attrs_post_init__()  # type: ignore[no-untyped-call]
 
     def register_routes(self) -> None:
-        """Register the ``/bbox`` route."""
+        """Register the ``/bbox`` and ``/position`` routes."""
 
         @self.router.get(
             "/bbox/{minx},{miny},{maxx},{maxy}",
@@ -153,6 +174,58 @@ class CovJSONFactory(BaseFactory):
 
             grid_input = _build_grid_input(image, info, band_kwargs, label_crs)
             coverage = to_coverage(grid_input)
+            headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
+
+            return CovJSONResponse(
+                content=coverage.model_dump_json(exclude_none=True),
+                headers=headers,
+            )
+
+        @self.router.get(
+            "/position",
+            response_class=CovJSONResponse,
+            operation_id=f"{self.operation_prefix}getCoverageForPosition",
+            summary="Get a CoverageJSON Point coverage for a position",
+            description=(
+                "Sample the dataset at the position `coords` (a WKT `POINT(x y)`) "
+                "and return a CoverageJSON Point coverage. By default the position "
+                "is interpreted in, and the output labeled with, CRS84 "
+                "(longitude/latitude); pass `crs` to override. Vertical selection "
+                "(a `z` level, or a 3-D `POINT Z`) is rejected: the 2-D raster "
+                "backing cannot sample a vertical level. A `datetime` selector is "
+                "not yet honored (this dataset has no temporal dimension)."
+            ),
+        )
+        def position_coverage(
+            coords: Annotated[
+                str,
+                Query(description="Position as WKT, e.g., POINT(0 0)."),
+            ],
+            src_path: Annotated[str, Depends(self.path_dependency)],
+            band_params: Annotated[CovJSONBandParams, Depends(self.band_dependency)],
+            dataset_params: Annotated[DatasetParams, Depends(self.dataset_dependency)],
+            crs: Annotated[rasterio.CRS | None, Depends(CRSParams)],
+            _vertical: Annotated[None, Depends(reject_vertical_selection)],
+            _format: Annotated[None, Depends(validate_covjson_format)],
+        ) -> CovJSONResponse:
+            position = _parse_point_wkt(coords)
+            read_crs, label_crs = _resolve_crs(crs)
+            _validate_label_crs(label_crs)
+            band_kwargs = to_kwargs(band_params)
+
+            point, info = _read_point(
+                self.reader,
+                src_path,
+                position,
+                read_crs=read_crs,
+                band_kwargs=band_kwargs,
+                dataset_kwargs=to_kwargs(dataset_params),
+            )
+
+            point_input = _build_point_input(
+                point, info, band_kwargs, position, label_crs
+            )
+            coverage = to_coverage(point_input)
             headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
 
             return CovJSONResponse(
@@ -247,6 +320,65 @@ def _read_bounded_image(
     return image, info
 
 
+def _read_point(
+    reader: type[Reader],
+    src_path: str,
+    position: Position,
+    *,
+    read_crs: rasterio.CRS,
+    band_kwargs: dict[str, Any],
+    dataset_kwargs: dict[str, Any],
+) -> tuple[PointData, Info]:
+    """Sample ``position`` from ``src_path``, returning the point and dataset info.
+
+    Opens ``src_path``, samples the single position (interpreting it in
+    ``read_crs``), and returns the point alongside the reader's dataset ``info``.
+    No sizing apparatus applies to a point sample, so unlike the bounding-box
+    read this drops ``max_size`` / cell-count handling entirely. An out-of-range
+    band index is rejected with ``BadRequestError`` by the guard this calls; a
+    position outside the dataset bounds is caught and re-raised as
+    ``BadRequestError`` (rio-tiler's ``PointOutsideBounds`` is not in titiler's
+    default status map, so it would otherwise surface as an opaque 500).
+
+    Args:
+        reader: The rio-tiler reader type used to open ``src_path``.
+        src_path: The dataset path or URL.
+        position: The position to sample, in ``read_crs``.
+        read_crs: The CRS the position is expressed in.
+        band_kwargs: Band-selection keyword arguments for ``point`` (indexes or
+            expression).
+        dataset_kwargs: Dataset-read keyword arguments for ``point`` (nodata,
+            unscale, resampling, reprojection).
+
+    Returns:
+        tuple[PointData, Info]: The sampled point and the reader's dataset info.
+
+    Raises:
+        BadRequestError: If a requested band index is out of range, or the
+            position falls outside the dataset bounds. The host application's
+            titiler exception handlers render this as a 400 response.
+    """
+    with reader(src_path) as src_dst:
+        info = src_dst.info()
+        _validate_band_indexes(band_kwargs.get("indexes"), info)
+
+        try:
+            point = src_dst.point(
+                position.x,
+                position.y,
+                coord_crs=read_crs,
+                **band_kwargs,
+                **dataset_kwargs,
+            )
+        except PointOutsideBounds as exc:
+            msg = (
+                f"Position is outside the dataset bounds: ({position.x}, {position.y})."
+            )
+            raise BadRequestError(msg) from exc
+
+    return point, info
+
+
 def _validate_bbox(minx: float, miny: float, maxx: float, maxy: float) -> None:
     """Reject a degenerate bounding box (each min must be strictly below its max).
 
@@ -270,6 +402,92 @@ def _validate_bbox(minx: float, miny: float, maxx: float, maxy: float) -> None:
     if minx >= maxx or miny >= maxy:
         msg = "Degenerate bbox: require minx < maxx and miny < maxy."
         raise BadRequestError(msg)
+
+
+def _parse_point_wkt(coords: str) -> Position:
+    """Parse a 2-D WKT ``POINT(x y)`` into a :class:`Position`.
+
+    A hand-rolled parser, deliberately dependency-free: a two-float point does
+    not justify a GEOS-backed geometry library, and confining WKT handling here
+    keeps the model layer geometry-free (only the parser body would change if a
+    future geometry endpoint made such a dependency load-bearing). Accepts a
+    plain 2-D ``POINT(x y)`` with whitespace-separated coordinates; everything
+    else is rejected with ``BadRequestError``:
+
+    - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or three or four
+      coordinates): the 2-D raster backing cannot sample a vertical level, so
+      echoing or dropping it would be dishonest (see
+      docs/adr/0001-covjson-http-api-direction.md);
+    - a non-POINT geometry, ``POINT EMPTY``, the wrong coordinate count, a
+      comma-separated ``POINT(1, 2)`` (the comma is the ``MULTIPOINT`` separator,
+      not an intra-point one), or any other malformed input;
+    - a non-finite coordinate (NaN or infinity), which would otherwise serialize
+      to a silent ``null`` domain axis.
+
+    Args:
+        coords: The raw ``coords`` query value.
+
+    Returns:
+        Position: The parsed 2-D position.
+
+    Raises:
+        BadRequestError: If ``coords`` is not a finite 2-D WKT point. The host
+            application's titiler exception handlers render this as a 400
+            response.
+
+    Examples:
+        >>> _parse_point_wkt("POINT(0 0)")
+        Position(x=0.0, y=0.0, z=None)
+        >>> _parse_point_wkt("  point ( -5.0   2.5 ) ")
+        Position(x=-5.0, y=2.5, z=None)
+
+        A 3-D point is rejected (vertical selection is unsupported here):
+
+        >>> _parse_point_wkt("POINT Z (0 0 5)")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Vertical or measured coordinates ...
+
+        A malformed point is rejected:
+
+        >>> _parse_point_wkt("POINT(0)")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Invalid position 'POINT(0)': ...
+    """
+    if (match := _POINT_WKT.match(coords)) is None:
+        msg = f"Invalid position {coords!r}: expected WKT POINT(x y), e.g., POINT(0 0)."
+        raise BadRequestError(msg)
+
+    tokens = match["coords"].split()
+
+    if match["tag"] or len(tokens) in (3, 4):
+        msg = (
+            "Vertical or measured coordinates are not supported: this endpoint "
+            f"samples a single 2-D raster. Provide a 2-D POINT(x y); got {coords!r}."
+        )
+        raise BadRequestError(msg)
+
+    if len(tokens) != 2:
+        msg = (
+            f"Invalid position {coords!r}: expected two coordinates, e.g., POINT(0 0)."
+        )
+        raise BadRequestError(msg)
+
+    # float() rejects non-numeric tokens and Position rejects non-finite ones
+    # (NaN/infinity), so one handler covers both: Position owns the finiteness
+    # invariant as the single source of truth (mirroring _validate_label_crs,
+    # which likewise turns a helper's ValueError into a BadRequestError).
+    try:
+        x, y = (float(token) for token in tokens)
+
+        return Position(x, y)
+    except ValueError:
+        msg = (
+            f"Invalid position {coords!r}: coordinates must be finite numbers "
+            "(not NaN or infinity), e.g., POINT(0 0)."
+        )
+        raise BadRequestError(msg) from None
 
 
 def _validate_output_dimensions(width: int | None, height: int | None) -> None:
@@ -576,11 +794,7 @@ def _build_grid_input(
     band_kwargs: dict[str, Any],
     crs: rasterio.CRS,
 ) -> GridInput:
-    """Build a GridInput, naming expression bands and aligning source metadata.
-
-    For an ``expression`` result, each derived band is named for its
-    sub-expression. Otherwise the reader's ``info()`` metadata is subset to the
-    bands actually returned.
+    """Build a GridInput from a read image, resolving per-band metadata.
 
     Args:
         image: The read image.
@@ -592,23 +806,78 @@ def _build_grid_input(
     Returns:
         GridInput: The intermediate representation for the modeler.
     """
-    if (expression := band_kwargs.get("expression")) is not None:
-        band_names = _expression_band_names(expression)
-
-        return imagedata_to_coverage_input(image, band_names=band_names, crs=crs)
-
-    by_name = {band.name: band for band in band_info_from_reader_info(info)}
-    # A read can change dtype from the source storage dtype (e.g., unscale casts
-    # an integer band to float when applying scale/offset), so select the
-    # CoverageJSON range type from the returned array's dtype, not info's. Each
-    # returned band name is looked up directly: a missing one is an internal
-    # invariant break that should surface loudly, not be silently dropped.
-    bands = tuple(
-        dataclasses.replace(by_name[name], dtype=image.array.dtype)
-        for name in image.band_names
-    )
+    bands = _resolve_read_bands(image, info, band_kwargs)
 
     return imagedata_to_coverage_input(image, bands=bands, crs=crs)
+
+
+def _build_point_input(
+    point: PointData,
+    info: Info,
+    band_kwargs: dict[str, Any],
+    position: Position,
+    crs: rasterio.CRS,
+) -> PointInput:
+    """Build a PointInput from a read point, resolving per-band metadata.
+
+    The mirror of :func:`_build_grid_input` for the point path: the same band
+    resolution, then the point converter carrying the sampled ``position``.
+
+    Args:
+        point: The read point sample.
+        info: The reader's dataset info (for source band metadata).
+        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
+            ``expression``).
+        position: The sampled position, in ``crs``.
+        crs: The CRS to label the coverage with.
+
+    Returns:
+        PointInput: The intermediate representation for the modeler.
+    """
+    bands = _resolve_read_bands(point, info, band_kwargs)
+
+    return pointdata_to_coverage_input(point, position=position, bands=bands, crs=crs)
+
+
+def _resolve_read_bands(
+    read: ImageData | PointData,
+    info: Info,
+    band_kwargs: dict[str, Any],
+) -> tuple[BandInfo, ...]:
+    """Resolve per-band metadata for a read result, aligned to the returned bands.
+
+    Shared by the grid and point paths (``ImageData`` and ``PointData`` both
+    expose ``array`` and ``band_names``). For an ``expression`` result, each
+    derived band is named for its sub-expression. Otherwise the reader's
+    ``info()`` metadata is subset to the bands actually returned.
+
+    A read can change dtype from the source storage dtype (e.g., unscale casts an
+    integer band to float when applying scale/offset), so the CoverageJSON range
+    type is selected from the returned array's dtype, not ``info``'s.
+
+    Args:
+        read: The read image or point sample.
+        info: The reader's dataset info (for source band metadata).
+        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
+            ``expression``).
+
+    Returns:
+        tuple[BandInfo, ...]: One entry per returned band, in band order.
+    """
+    if (expression := band_kwargs.get("expression")) is not None:
+        return tuple(
+            BandInfo(name=name, dtype=read.array.dtype)
+            for name in _expression_band_names(expression)
+        )
+
+    by_name = {band.name: band for band in band_info_from_reader_info(info)}
+
+    # Each returned band name is looked up directly: a missing one is an internal
+    # invariant break that should surface loudly, not be silently dropped.
+    return tuple(
+        dataclasses.replace(by_name[name], dtype=read.array.dtype)
+        for name in read.band_names
+    )
 
 
 def _expression_band_names(expression: str) -> tuple[str, ...]:

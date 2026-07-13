@@ -7,9 +7,10 @@ items), and none of those objects carries everything a CoverageJSON document
 needs: band descriptions and units, timestamps, source geometry, or
 collection/item provenance. This module defines the per-domain input variants
 that carry it: a shared base plus one frozen dataclass per domain
-(:class:`GridInput` now; Point and PointSeries variants follow), grouped under
-the :data:`CoverageInput` alias that endpoint code fills from whatever it read
-and that the modeler consumes to build covjson-pydantic ``Coverage`` objects.
+(:class:`GridInput` and :class:`PointInput` now; a PointSeries variant follows),
+grouped under the :data:`CoverageInput` alias that endpoint code fills from
+whatever it read and that the modeler consumes to build covjson-pydantic
+``Coverage`` objects.
 
 Keeping this intermediate layer separate buys three things: the modeler never
 depends on rio-tiler types, changes to the rio-tiler API are contained to the
@@ -19,6 +20,7 @@ can be tested from plain numpy arrays without raster files or readers.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -30,7 +32,7 @@ if TYPE_CHECKING:
 
     import numpy.typing as npt
     import rasterio
-    from rio_tiler.models import ImageData, Info
+    from rio_tiler.models import ImageData, Info, PointData
 
 # Per-band GDAL metadata keys probed (in order) for a unit string. netCDF
 # exposes "units", GRIB uses "GRIB_UNIT", and some drivers use "UNITTYPE";
@@ -63,6 +65,49 @@ class BandInfo:
     description: str = ""
     unit: str = ""
     dtype: npt.DTypeLike = np.float32
+
+
+@dataclass(frozen=True)
+class Position:
+    """A point location in a coordinate reference system.
+
+    Carries the horizontal coordinates of a single position and, optionally, a
+    vertical coordinate. The coordinate reference system is not stored here: it
+    lives alongside on the :class:`CoverageInput` variant that holds the position
+    (as ``crs``), so ``x``, ``y``, and ``z`` are bare numbers expressed in that
+    CRS.
+
+    Attributes:
+        x: Easting or longitude, in the holder's CRS.
+        y: Northing or latitude, in the holder's CRS.
+        z: Vertical coordinate (e.g., height or depth), or ``None`` when the
+            position is purely horizontal.
+    """
+
+    x: float
+    y: float
+    z: float | None = None
+
+    def __post_init__(self) -> None:
+        """Reject non-finite coordinates at construction.
+
+        A NaN or infinite coordinate names no location on the ground and would
+        serialize to a JSON ``null`` in a coverage domain axis, silently
+        corrupting the output rather than failing, so it is rejected here where
+        the value becomes a :class:`Position`.
+
+        Raises:
+            ValueError: If ``x``, ``y``, or a non-``None`` ``z`` is not finite
+                (NaN or infinity).
+        """
+        finite = (self.x, self.y) if self.z is None else (self.x, self.y, self.z)
+
+        if not all(map(math.isfinite, finite)):
+            msg = (
+                "Position coordinates must be finite (not NaN or infinity); got "
+                f"x={self.x}, y={self.y}, z={self.z}."
+            )
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -206,10 +251,53 @@ class GridInput(_CoverageInputBase):
             raise ValueError(msg)
 
 
-# Alias for the per-domain input union. Currently a single member; the point
-# variants (PointInput, PointSeriesInput) join it in #23, at which point the
-# modeler's `match` gains cases and `assert_never` enforces exhaustiveness.
-CoverageInput = GridInput
+@dataclass(frozen=True, eq=False, kw_only=True)
+class PointInput(_CoverageInputBase):
+    """Point (single position) domain input.
+
+    ``data`` is a 1-D masked array shaped ``(bands,)``: one sampled value per
+    band at a single location. ``position`` gives that location in ``crs``. This
+    is the variant :func:`pointdata_to_coverage_input` produces from a rio-tiler
+    ``PointData``, whose ``array`` is already 1-D per band.
+
+    Attributes:
+        position: The sampled location, in ``crs``.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> cov = PointInput(
+        ...     data=np.ma.MaskedArray(np.array([1.5], dtype="float32")),
+        ...     position=Position(-5.0, 2.5),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bands=(BandInfo("b1", unit="mm"),),
+        ... )
+        >>> cov.data.shape
+        (1,)
+        >>> cov.position.x, cov.position.y
+        (-5.0, 2.5)
+    """
+
+    position: Position
+
+    def _validate_shape(self) -> None:
+        """Require 1-D ``(bands,)`` data.
+
+        Raises:
+            ValueError: If ``data`` is not 1-D.
+        """
+        if self.data.ndim != 1:
+            msg = (
+                f"Point data must have shape (bands,); got {self.data.ndim} dimensions"
+            )
+            raise ValueError(msg)
+
+
+# Alias for the per-domain input union. GridInput and PointInput are both
+# members (the EDR /position slice, #44); the modeler's `match` dispatches on
+# each, and `assert_never` in its default arm enforces exhaustiveness as further
+# variants (e.g., PointSeriesInput) join.
+CoverageInput = GridInput | PointInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
@@ -283,11 +371,11 @@ def _per_band(
 
     Args:
         label: Argument name used in the error message.
-        n_bands: Number of bands in the image.
+        n_bands: Number of bands in the read result (an image or point sample).
         values: Caller-supplied per-band values, or ``None`` to use
             ``default``.
         default: Values to use when ``values`` is ``None``. Also validated:
-            a default drawn from image metadata (e.g., ``img.band_names``)
+            a default drawn from reader metadata (e.g., ``read.band_names``)
             is not guaranteed to match the band count, since rio-tiler does
             not validate ``band_names`` length at construction.
 
@@ -301,31 +389,34 @@ def _per_band(
         values = default
 
     if len(values) != n_bands:
-        msg = f"`{label}` has {len(values)} entries but the image has {n_bands} band(s)"
+        msg = f"`{label}` has {len(values)} entries but the data has {n_bands} band(s)"
         raise ValueError(msg)
 
     return values
 
 
 def _resolve_bands(
-    img: ImageData,
+    source: ImageData | PointData,
     bands: Sequence[BandInfo] | None,
     band_names: Sequence[str] | None,
     band_descriptions: Sequence[str] | None,
     band_units: Sequence[str] | None,
 ) -> tuple[BandInfo, ...]:
-    """Resolve per-band metadata for :func:`imagedata_to_coverage_input`.
+    """Resolve per-band metadata for the ``ImageData``/``PointData`` converters.
+
+    ``ImageData`` and ``PointData`` share the ``count``, ``band_names``, and
+    ``array`` attributes this reads, so one resolver serves both converters.
 
     Args:
-        img: Source image.
+        source: Source image or point.
         bands: Complete per-band metadata, used as given. Mutually exclusive
             with the per-attribute arguments.
-        band_names: Per-band names overriding ``img.band_names``.
+        band_names: Per-band names overriding ``source.band_names``.
         band_descriptions: Per-band descriptions.
         band_units: Per-band UCUM unit codes.
 
     Returns:
-        tuple[BandInfo, ...]: One entry per image band.
+        tuple[BandInfo, ...]: One entry per band.
 
     Raises:
         ValueError: If ``bands`` is combined with a per-attribute argument,
@@ -343,12 +434,12 @@ def _resolve_bands(
 
         return tuple(bands)
 
-    n_bands = img.count
+    n_bands = source.count
     names = _per_band(
         "band_names",
         n_bands,
         values=band_names,
-        default=img.band_names or [],
+        default=source.band_names or [],
     )
     descriptions = _per_band(
         "band_descriptions",
@@ -364,9 +455,52 @@ def _resolve_bands(
     )
 
     return tuple(
-        BandInfo(name=name, description=description, unit=unit, dtype=img.array.dtype)
+        BandInfo(
+            name=name, description=description, unit=unit, dtype=source.array.dtype
+        )
         for name, description, unit in zip(names, descriptions, units, strict=True)
     )
+
+
+def _require_crs(
+    source: ImageData | PointData, crs: rasterio.CRS | None
+) -> rasterio.CRS:
+    """Resolve the CRS to build a coverage with, preferring an explicit override.
+
+    The raster and point converters resolve their CRS the same way: an explicit
+    ``crs`` argument wins, else the read result's own ``crs`` is used, and a
+    missing CRS is an error, since a coverage cannot be built without one.
+
+    Args:
+        source: The read result whose ``crs`` is the fallback.
+        crs: An explicit CRS override, or ``None`` to use ``source.crs``.
+
+    Returns:
+        rasterio.CRS: The resolved CRS.
+
+    Raises:
+        ValueError: If neither ``crs`` nor ``source.crs`` is available.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from rio_tiler.models import PointData
+        >>> point = PointData(np.ma.MaskedArray(np.array([1.0])))
+        >>> _require_crs(point, rasterio.CRS.from_epsg(4326)).to_epsg()
+        4326
+        >>> _require_crs(point, None)
+        Traceback (most recent call last):
+            ...
+        ValueError: PointData has no CRS; pass an explicit `crs` argument
+    """
+    # Prefer an explicit override with `is not None`, not truthiness: an empty
+    # rasterio.CRS() is falsy but a real (if unusable) override, and `crs or ...`
+    # would silently discard it in favor of source.crs.
+    if (resolved_crs := crs if crs is not None else source.crs) is None:
+        msg = f"{type(source).__name__} has no CRS; pass an explicit `crs` argument"
+        raise ValueError(msg)
+
+    return resolved_crs
 
 
 def imagedata_to_coverage_input(
@@ -456,10 +590,7 @@ def imagedata_to_coverage_input(
         msg = "ImageData has no bounds; cannot build a CoverageInput"
         raise ValueError(msg)
 
-    if (resolved_crs := crs or img.crs) is None:
-        msg = "ImageData has no CRS; pass an explicit `crs` argument"
-        raise ValueError(msg)
-
+    resolved_crs = _require_crs(img, crs)
     left, bottom, right, top = img.bounds
 
     return GridInput(
@@ -469,4 +600,66 @@ def imagedata_to_coverage_input(
         bands=_resolve_bands(img, bands, band_names, band_descriptions, band_units),
         collection_id=collection_id,
         item_ids=tuple(item_ids) if item_ids is not None else None,
+    )
+
+
+def pointdata_to_coverage_input(
+    point: PointData,
+    *,
+    position: Position,
+    bands: Sequence[BandInfo] | None = None,
+    crs: rasterio.CRS | None = None,
+) -> PointInput:
+    """Convert a rio-tiler ``PointData`` to a :class:`PointInput`.
+
+    This is the converter used by point endpoints, which sample a single
+    location and yield a ``PointData``. The point's masked array is passed
+    through unchanged: rio-tiler stores ``PointData.array`` as a 1-D ``(bands,)``
+    masked array with nodata already encoded in the mask, which is exactly the
+    :class:`PointInput` data shape, so no reshaping or further nodata handling is
+    required here.
+
+    The sampled ``position`` is supplied by the caller rather than taken from
+    ``point.coordinates``, so the coverage advertises the position the caller
+    requested, in the CRS the coverage is labeled with. A ``PointData`` reports
+    its ``coordinates`` in the CRS the read was queried in, which need not be the
+    label CRS, so passing ``position`` directly keeps the reported location and
+    the domain's referencing consistent, and keeps this converter independent of
+    how the reader reports coordinates.
+
+    Band metadata comes from an explicit ``bands`` sequence when given, otherwise
+    from the point's own ``band_names`` with empty descriptions and units.
+
+    Args:
+        point: Source point, e.g., from ``Reader.point()``.
+        position: The sampled location, in ``crs``, to label the coverage with.
+        bands: Complete per-band metadata; defaults to the point's ``band_names``.
+        crs: CRS overriding ``point.crs``.
+
+    Returns:
+        PointInput: The intermediate representation of the point.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from rio_tiler.models import PointData
+        >>> point = PointData(
+        ...     np.ma.MaskedArray(np.array([1.5, 2.5], dtype="float32")),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ... )
+        >>> cov = pointdata_to_coverage_input(point, position=Position(-5.0, 2.5))
+        >>> cov.data.shape
+        (2,)
+        >>> [band.name for band in cov.bands]
+        ['b1', 'b2']
+        >>> cov.position.x, cov.position.y
+        (-5.0, 2.5)
+    """
+    resolved_crs = _require_crs(point, crs)
+
+    return PointInput(
+        data=point.array,
+        position=position,
+        crs=resolved_crs,
+        bands=_resolve_bands(point, bands, None, None, None),
     )

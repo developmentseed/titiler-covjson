@@ -1,13 +1,45 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 import rasterio
 from conftest import validate_covjson
 from fastapi.testclient import TestClient
 from rio_tiler.io import Reader
+from rio_tiler.models import ImageData, Info, PointData
+from titiler.core.errors import BadRequestError
 
-from titiler_covjson.factory import CovJSONFactory, _resolve_grid_dimensions
+from titiler_covjson.factory import (
+    CovJSONFactory,
+    _parse_point_wkt,
+    _resolve_grid_dimensions,
+    _resolve_read_bands,
+)
+from titiler_covjson.input import Position
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
+
+
+def two_band_info(dtype: str = "int16") -> Info:
+    """Build a 2-band reader ``Info`` for band-resolution tests.
+
+    Bands ``b1``/``b2`` are described ``red``/``nir``, and ``b1`` carries a
+    ``units`` tag of ``mm``. The ``dtype`` is the source *storage* dtype, kept
+    distinct from a read array's dtype so the dtype swap can be observed.
+
+    Args:
+        dtype: The dataset-level storage dtype recorded on the info.
+
+    Returns:
+        Info: A 2-band reader info.
+    """
+    return Info(
+        bounds=(-10.0, -5.0, 10.0, 5.0),
+        crs="http://www.opengis.net/def/crs/EPSG/0/4326",
+        band_metadata=[("b1", {"units": "mm"}), ("b2", {})],
+        band_descriptions=[("b1", "red"), ("b2", "nir")],
+        dtype=dtype,
+        nodata_type="None",
+    )
 
 
 def test_bbox_returns_schema_valid_grid_coverage(
@@ -533,3 +565,338 @@ def test_bbox_rejects_crs_without_ogc_authority(
     )
     assert response.status_code == 400, response.text
     assert "no OGC authority code" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("wkt", "expected"),
+    [
+        ("POINT(0 0)", Position(0.0, 0.0)),
+        ("POINT(-5.0 2.5)", Position(-5.0, 2.5)),
+        ("point(1 2)", Position(1.0, 2.0)),
+        ("  POINT ( 1   2 ) ", Position(1.0, 2.0)),
+        ("POINT(1e2 -3.5)", Position(100.0, -3.5)),
+        ("POINT(+1 -2)", Position(1.0, -2.0)),
+    ],
+    ids=["canonical", "decimals", "lowercase", "whitespace", "exponent", "signs"],
+)
+def test_parse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None:
+    assert _parse_point_wkt(wkt) == expected
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "POINT Z (0 0 5)",
+        "POINT M (0 0 5)",
+        "POINT ZM (0 0 5 1)",
+        "POINTZ(0 0 5)",
+        "POINT(0 0 5)",
+        "POINT(0 0 5 1)",
+    ],
+    ids=["Z-tag", "M-tag", "ZM-tag", "Z-suffix", "3-token", "4-token"],
+)
+def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
+    # A vertical/measured geometry is rejected: the 2-D raster cannot sample it.
+    with pytest.raises(BadRequestError, match="not supported"):
+        _parse_point_wkt(wkt)
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "POINT EMPTY",
+        "MULTIPOINT(0 0)",
+        "LINESTRING(0 0, 1 1)",
+        "not-wkt",
+        "",
+        "POINT()",
+        "POINT(0)",
+        "POINT(1, 2)",
+        "POINT(nan 0)",
+        "POINT(1 inf)",
+        "POINT(1e400 0)",
+    ],
+    ids=[
+        "empty-geom",
+        "multipoint",
+        "linestring",
+        "garbage",
+        "blank",
+        "no-coords",
+        "one-coord",
+        "comma",
+        "nan",
+        "inf",
+        "overflow",
+    ],
+)
+def test_parse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
+    with pytest.raises(BadRequestError, match="Invalid position"):
+        _parse_point_wkt(wkt)
+
+
+@pytest.mark.parametrize("kind", ["image", "point"], ids=["ImageData", "PointData"])
+def test_resolve_read_bands_subsets_info_and_swaps_dtype(kind: str) -> None:
+    # The subset path aligns info() metadata (names, descriptions, units) to the
+    # returned bands and takes the dtype from the read array, not info's storage.
+    info = two_band_info(dtype="int16")
+    read: ImageData | PointData = (
+        ImageData(np.arange(2 * 2 * 2, dtype="float32").reshape(2, 2, 2))
+        if kind == "image"
+        else PointData(np.arange(2, dtype="float32"))
+    )
+
+    bands = _resolve_read_bands(read, info, {})
+
+    assert [band.name for band in bands] == ["b1", "b2"]
+    assert [band.description for band in bands] == ["red", "nir"]
+    assert bands[0].unit == "mm"
+    assert all(band.dtype == np.dtype("float32") for band in bands)
+
+
+@pytest.mark.parametrize("kind", ["image", "point"], ids=["ImageData", "PointData"])
+def test_resolve_read_bands_names_expression_bands(kind: str) -> None:
+    # The expression path names each derived band for its sub-expression, with
+    # empty description/unit and the read array's dtype; info is not consulted.
+    read: ImageData | PointData = (
+        ImageData(np.arange(2 * 2 * 2, dtype="float32").reshape(2, 2, 2))
+        if kind == "image"
+        else PointData(np.arange(2, dtype="float32"))
+    )
+
+    bands = _resolve_read_bands(read, two_band_info(), {"expression": "b1;b2/b1"})
+
+    assert [band.name for band in bands] == ["b1", "b2/b1"]
+    assert all(band.dtype == np.dtype("float32") for band in bands)
+    assert all(band.description == "" and band.unit == "" for band in bands)
+
+
+def test_position_returns_schema_valid_point_coverage(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # POINT(0 0) samples the 2x2 source's shared center corner (both bands 3.0).
+    # Small enough to assert the whole Point coverage document: single-value x/y
+    # axes at the sampled location, CRS84 x-before-y referencing, band
+    # descriptions as parameter labels, and 0-D scalar ranges.
+    response = client.get(
+        "/position", params={"url": tiny_cog_path, "coords": "POINT(0 0)"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(COVJSON_MEDIA_TYPE)
+    assert response.headers["content-crs"] == (
+        "<http://www.opengis.net/def/crs/OGC/1.3/CRS84>"
+    )
+
+    body = response.json()
+    validate_covjson(body)
+
+    assert body == {
+        "type": "Coverage",
+        "domain": {
+            "type": "Domain",
+            "domainType": "Point",
+            "axes": {"x": {"values": [0.0]}, "y": {"values": [0.0]}},
+            "referencing": [
+                {
+                    "coordinates": ["x", "y"],
+                    "system": {
+                        "type": "GeographicCRS",
+                        "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+                    },
+                }
+            ],
+        },
+        "parameters": {
+            "b1": {
+                "type": "Parameter",
+                "observedProperty": {"label": {"en": "red"}},
+            },
+            "b2": {
+                "type": "Parameter",
+                "observedProperty": {"label": {"en": "nir"}},
+            },
+        },
+        "ranges": {
+            "b1": {
+                "type": "NdArray",
+                "dataType": "float",
+                "axisNames": [],
+                "shape": [],
+                "values": [3.0],
+            },
+            "b2": {
+                "type": "NdArray",
+                "dataType": "float",
+                "axisNames": [],
+                "shape": [],
+                "values": [3.0],
+            },
+        },
+    }
+
+
+def test_position_nodata_serializes_as_null(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # POINT(-5 2.5) hits the top-left pixel: band 1 = 0.0, band 2 = nodata (null).
+    response = client.get(
+        "/position", params={"url": tiny_cog_path, "coords": "POINT(-5 2.5)"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ranges"]["b1"]["values"] == [0.0]
+    assert body["ranges"]["b2"]["values"] == [None]
+
+
+def test_position_honors_explicit_crs(client: TestClient, cog_path: str) -> None:
+    # An explicit crs is labeled as requested, so the coverage advertises the
+    # EPSG:4326 URI (and its lat/lon authority axis order) rather than CRS84.
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "POINT(0 0)", "crs": "epsg:4326"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-crs"] == (
+        "<http://www.opengis.net/def/crs/EPSG/0/4326>"
+    )
+    body = response.json()
+    assert body["domain"]["domainType"] == "Point"
+    assert body["domain"]["referencing"][0]["coordinates"] == ["y", "x"]
+
+
+def test_position_reprojects_to_projected_crs(
+    client: TestClient, cog_path: str
+) -> None:
+    # A projected crs samples in that CRS and labels the domain with it; the x/y
+    # axes echo the requested position (0, 0) in the projected CRS.
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "POINT(0 0)", "crs": "epsg:3857"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    system = body["domain"]["referencing"][0]["system"]
+    assert system["type"] == "ProjectedCRS"
+    assert system["id"] == "http://www.opengis.net/def/crs/EPSG/0/3857"
+    assert body["domain"]["axes"]["x"]["values"] == [0.0]
+
+
+def test_position_selects_band_by_parameter_name(
+    client: TestClient, cog_path: str
+) -> None:
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "POINT(0 0)", "parameter-name": "b1"},
+    )
+    assert response.status_code == 200, response.text
+    assert set(response.json()["parameters"]) == {"b1"}
+
+
+def test_position_bidx_aligns_band_metadata_and_value(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # Selecting band 2 carries band 2's own metadata and value (3.0 at POINT(0 0)),
+    # proving the info()-to-point band alignment on the scalar range.
+    response = client.get(
+        "/position",
+        params={"url": tiny_cog_path, "coords": "POINT(0 0)", "bidx": 2},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body["parameters"]) == {"b2"}
+    assert body["parameters"]["b2"]["observedProperty"]["label"] == {"en": "nir"}
+    assert body["ranges"]["b2"]["values"] == [3.0]
+
+
+def test_position_selects_bands_by_expression(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # An expression names its derived band and carries the computed value. At
+    # POINT(0 0) both bands are 3.0, so b1/b2 = 1.0.
+    response = client.get(
+        "/position",
+        params={"url": tiny_cog_path, "coords": "POINT(0 0)", "expression": "b1/b2"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body["parameters"]) == {"b1/b2"}
+    assert body["ranges"]["b1/b2"]["values"] == [1.0]
+
+
+@pytest.mark.parametrize("bidx", [5, 0], ids=["above-range", "below-range"])
+def test_position_rejects_out_of_range_band_index(
+    client: TestClient, cog_path: str, bidx: int
+) -> None:
+    response = client.get(
+        "/position", params={"url": cog_path, "coords": "POINT(0 0)", "bidx": bidx}
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_position_rejects_conflicting_band_selectors(
+    client: TestClient, cog_path: str
+) -> None:
+    response = client.get(
+        "/position",
+        params={
+            "url": cog_path,
+            "coords": "POINT(0 0)",
+            "bidx": 1,
+            "expression": "b1/b2",
+        },
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_position_outside_bounds_is_rejected(client: TestClient, cog_path: str) -> None:
+    # A position outside the dataset raises rio-tiler's PointOutsideBounds, which
+    # the handler catches and re-raises as a 400 (it is not in titiler's default
+    # status map, so it would otherwise be an opaque 500).
+    response = client.get(
+        "/position", params={"url": cog_path, "coords": "POINT(100 100)"}
+    )
+    assert response.status_code == 400, response.text
+    assert "outside the dataset bounds" in response.json()["detail"]
+
+
+def test_position_rejects_bad_coords(client: TestClient, cog_path: str) -> None:
+    # Every _parse_point_wkt rejection flows through the same route wiring to a
+    # 400, and the parse cases are exhaustively unit-tested above, so one
+    # representative case here confirms the wiring.
+    response = client.get("/position", params={"url": cog_path, "coords": "not-wkt"})
+    assert response.status_code == 400, response.text
+
+
+def test_position_rejects_vertical_z_param(client: TestClient, cog_path: str) -> None:
+    # The idiomatic EDR vertical (a separate z query parameter) is rejected: the
+    # 2-D raster backing has no vertical dimension to sample.
+    response = client.get(
+        "/position", params={"url": cog_path, "coords": "POINT(0 0)", "z": "850"}
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_position_accepts_empty_z_param(client: TestClient, cog_path: str) -> None:
+    # A valueless ?z= is empty-is-absent: no vertical selection, so it is accepted.
+    response = client.get(
+        "/position", params={"url": cog_path, "coords": "POINT(0 0)", "z": ""}
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_position_rejects_unsupported_format(client: TestClient, cog_path: str) -> None:
+    response = client.get(
+        "/position", params={"url": cog_path, "coords": "POINT(0 0)", "f": "png"}
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_position_requires_coords(client: TestClient, cog_path: str) -> None:
+    # coords is a required query param; its absence is a FastAPI validation error.
+    response = client.get("/position", params={"url": cog_path})
+    assert response.status_code == 422, response.text
+
+
+def test_position_requires_url(client: TestClient) -> None:
+    response = client.get("/position", params={"coords": "POINT(0 0)"})
+    assert response.status_code == 422, response.text
