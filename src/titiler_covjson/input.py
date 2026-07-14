@@ -21,10 +21,12 @@ can be tested from plain numpy arrays without raster files or readers.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from titiler_covjson.reduce import Stat, reduce_bands
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -108,6 +110,69 @@ class Position:
                 f"x={self.x}, y={self.y}, z={self.z}."
             )
             raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class Polygon:
+    """A polygon geometry: one exterior ring and zero or more interior rings.
+
+    Carries the polygon's linear rings as ``(exterior, *holes)``. Each ring is a
+    sequence of ``(x, y)`` vertices, closed so the first and last vertex coincide.
+    The coordinate reference system is not stored here: it lives alongside on the
+    :class:`CoverageInput` variant that holds the polygon (as ``crs``), so the
+    vertex coordinates are bare numbers expressed in that CRS.
+
+    Attributes:
+        rings: The linear rings as ``(exterior, *holes)``. The first ring is the
+            exterior boundary; any further rings are interior boundaries (holes).
+            Each ring is a tuple of ``(x, y)`` vertices, closed (first vertex
+            equal to last).
+    """
+
+    rings: tuple[tuple[tuple[float, float], ...], ...]
+
+    def __post_init__(self) -> None:
+        """Reject a structurally invalid or non-finite polygon at construction.
+
+        A ring that is unclosed, too short to bound an area, or carries a NaN or
+        infinite coordinate names no region on the ground and would produce an
+        invalid clip or a silently corrupt domain axis, so it is rejected here
+        where the value becomes a :class:`Polygon`.
+
+        Raises:
+            ValueError: If there are no rings; if any coordinate is not finite
+                (NaN or infinity); if any ring has fewer than four vertices; or if
+                any ring is not closed (its first vertex differs from its last).
+        """
+        if not self.rings:
+            msg = "A polygon must have at least one ring (the exterior ring)."
+            raise ValueError(msg)
+
+        coordinates = [
+            coordinate
+            for ring in self.rings
+            for vertex in ring
+            for coordinate in vertex
+        ]
+
+        if not all(map(math.isfinite, coordinates)):
+            msg = "Polygon coordinates must be finite (not NaN or infinity)."
+            raise ValueError(msg)
+
+        for ring in self.rings:
+            if len(ring) < 4:
+                msg = (
+                    "Each polygon ring must have at least four vertices "
+                    f"(a closed triangle); got {len(ring)}."
+                )
+                raise ValueError(msg)
+
+            if ring[0] != ring[-1]:
+                msg = (
+                    "Each polygon ring must be closed (first vertex equal to last); "
+                    f"got {ring[0]} != {ring[-1]}."
+                )
+                raise ValueError(msg)
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -289,6 +354,54 @@ class PointInput(_CoverageInputBase):
         if self.data.ndim != 1:
             msg = (
                 f"Point data must have shape (bands,); got {self.data.ndim} dimensions"
+            )
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, eq=False, kw_only=True)
+class PolygonInput(_CoverageInputBase):
+    """Polygon (single polygon, scalar-per-band zonal reduction) domain input.
+
+    ``data`` is a 1-D masked array shaped ``(bands,)``: one reduced scalar per
+    band summarizing the raster over ``geometry`` (the same shape contract as
+    :class:`PointInput`). ``geometry`` gives that polygon in ``crs``. This is the
+    variant :func:`imagedata_to_polygon_input` produces after clipping a raster
+    to a polygon and reducing it by a statistic. A masked entry marks a band with
+    no valid pixels (an empty or all-nodata polygon), which serializes as
+    ``null``.
+
+    Attributes:
+        geometry: The polygon the values summarize, in ``crs``.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> cov = PolygonInput(
+        ...     data=np.ma.MaskedArray(np.array([1.5], dtype="float32")),
+        ...     geometry=Polygon(
+        ...         rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),)
+        ...     ),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bands=(BandInfo("b1", unit="mm"),),
+        ... )
+        >>> cov.data.shape
+        (1,)
+        >>> len(cov.geometry.rings)
+        1
+    """
+
+    geometry: Polygon
+
+    def _validate_shape(self) -> None:
+        """Require 1-D ``(bands,)`` data.
+
+        Raises:
+            ValueError: If ``data`` is not 1-D.
+        """
+        if self.data.ndim != 1:
+            msg = (
+                "Polygon data must have shape (bands,); "
+                f"got {self.data.ndim} dimensions"
             )
             raise ValueError(msg)
 
@@ -662,4 +775,74 @@ def pointdata_to_coverage_input(
         position=position,
         crs=resolved_crs,
         bands=_resolve_bands(point, bands, None, None, None),
+    )
+
+
+def imagedata_to_polygon_input(
+    img: ImageData,
+    *,
+    geometry: Polygon,
+    stat: Stat,
+    bands: Sequence[BandInfo] | None = None,
+    crs: rasterio.CRS | None = None,
+) -> PolygonInput:
+    """Reduce a polygon-clipped rio-tiler ``ImageData`` to a :class:`PolygonInput`.
+
+    This is the converter used by an area query: a raster clipped to a polygon
+    (its outside-polygon and nodata pixels already masked) is reduced to one
+    scalar per band by ``stat``. Unlike the grid and point converters, the band
+    ``dtype`` is taken from the *reduced* array rather than the source raster: the
+    statistic determines the range's value type (``mean`` of an integer raster is
+    float; ``count`` is integer), so a supplied or resolved band's own dtype is
+    intentionally replaced. This keeps the range's declared type and its values in
+    agreement, which the grid and point paths get for free (there the band dtype
+    is the array dtype).
+
+    Band names, descriptions, and units come from an explicit ``bands`` sequence
+    when given, otherwise from the image's own ``band_names`` with empty
+    descriptions and units.
+
+    Args:
+        img: The clipped source image, e.g., from ``Reader.feature()``.
+        geometry: The polygon the reduced values summarize, in ``crs``.
+        stat: The statistic to reduce each band by.
+        bands: Complete per-band metadata supplying names/units; the dtype is
+            overridden by the reduction. Defaults to the image's ``band_names``.
+        crs: CRS overriding ``img.crs``.
+
+    Returns:
+        PolygonInput: The intermediate representation of the reduced polygon.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from rio_tiler.models import ImageData
+        >>> from titiler_covjson.reduce import Stat
+        >>> img = ImageData(
+        ...     np.ma.MaskedArray(np.arange(8, dtype="float32").reshape(2, 2, 2)),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bounds=(0.0, 0.0, 2.0, 2.0),
+        ... )
+        >>> geometry = Polygon(
+        ...     rings=(((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)),)
+        ... )
+        >>> cov = imagedata_to_polygon_input(img, geometry=geometry, stat=Stat.MEAN)
+        >>> cov.data.tolist()
+        [1.5, 5.5]
+    """
+    reduced = reduce_bands(img.array, stat)
+    resolved_crs = _require_crs(img, crs)
+
+    # The statistic sets the value type, so stamp every band's dtype from the
+    # reduced array; the names/units resolved here are what carry through.
+    typed_bands = tuple(
+        replace(band, dtype=reduced.dtype)
+        for band in _resolve_bands(img, bands, None, None, None)
+    )
+
+    return PolygonInput(
+        data=reduced,
+        geometry=geometry,
+        crs=resolved_crs,
+        bands=typed_bands,
     )

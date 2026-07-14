@@ -14,15 +14,21 @@ from titiler_covjson.input import (
     BandInfo,
     GridInput,
     PointInput,
+    Polygon,
+    PolygonInput,
     Position,
     band_info_from_reader_info,
     imagedata_to_coverage_input,
+    imagedata_to_polygon_input,
     pointdata_to_coverage_input,
 )
+from titiler_covjson.reduce import Stat
 
 BOUNDS = (-10.0, -5.0, 10.0, 5.0)
 CRS_EPSG_3857 = rasterio.CRS.from_epsg(3857)
 POSITION = Position(1.0, 2.0)
+# A unit square exterior ring (closed), no holes.
+SQUARE = Polygon(rings=(((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)),))
 
 
 def make_image(
@@ -90,6 +96,18 @@ def point_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> PointInput:
         PointInput: An input with a default position and CRS.
     """
     return PointInput(data=data, position=POSITION, crs=CRS_EPSG_3857)
+
+
+def polygon_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> PolygonInput:
+    """Build a minimal PolygonInput around the given array.
+
+    Args:
+        data: The masked data array, shaped ``(bands,)``.
+
+    Returns:
+        PolygonInput: An input with a default polygon geometry and CRS.
+    """
+    return PolygonInput(data=data, geometry=SQUARE, crs=CRS_EPSG_3857)
 
 
 class TestBandInfo:
@@ -580,3 +598,158 @@ class TestPointdataToCoverageInput:
 
         assert cov.crs == empty
         assert cov.crs != CRS_EPSG_3857
+
+
+class TestPolygon:
+    """Test the Polygon geometry value type."""
+
+    def test_minimal_construction(self) -> None:
+        """A single closed exterior ring is sufficient (no holes)."""
+        poly = Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),))
+
+        assert len(poly.rings) == 1
+        assert poly.rings[0][0] == (0.0, 0.0)
+
+    def test_with_hole(self) -> None:
+        """An exterior ring plus one interior ring (hole) is carried."""
+        exterior = ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0))
+        hole = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0))
+        poly = Polygon(rings=(exterior, hole))
+
+        assert len(poly.rings) == 2
+
+    def test_empty_rings_raises(self) -> None:
+        """A polygon must have at least an exterior ring."""
+        with pytest.raises(ValueError, match="at least one ring"):
+            Polygon(rings=())
+
+    def test_too_few_vertices_raises(self) -> None:
+        """A ring needs at least four vertices (a closed triangle)."""
+        with pytest.raises(ValueError, match="at least four vertices"):
+            Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (0.0, 0.0)),))
+
+    def test_unclosed_ring_raises(self) -> None:
+        """A ring whose first and last vertices differ is rejected."""
+        with pytest.raises(ValueError, match="closed"):
+            Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),))
+
+    @pytest.mark.parametrize(
+        "bad", [float("nan"), float("inf"), float("-inf")], ids=("nan", "inf", "-inf")
+    )
+    def test_non_finite_vertex_raises(self, bad: float) -> None:
+        """A NaN or infinite vertex coordinate is rejected at construction."""
+        with pytest.raises(ValueError, match="must be finite"):
+            Polygon(rings=(((0.0, 0.0), (bad, 0.0), (1.0, 1.0), (0.0, 0.0)),))
+
+    def test_frozen(self) -> None:
+        """Polygon is immutable."""
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            SQUARE.rings = ()  # type: ignore[misc]
+
+
+class TestPolygonInput:
+    """Test the PolygonInput dataclass."""
+
+    def test_minimal_construction(self) -> None:
+        """A 1-D masked array with a geometry and CRS is sufficient."""
+        cov = polygon_input(np.ma.MaskedArray(np.zeros(2)))
+
+        # bands is resolved at construction, so it is never empty afterwards.
+        assert [band.name for band in cov.bands] == ["b1", "b2"]
+        assert cov.geometry == SQUARE
+        assert cov.collection_id is None
+        assert cov.item_ids is None
+
+    @pytest.mark.parametrize(
+        "shape",
+        [(2, 1), (2, 3), (2, 1, 1), ()],
+        ids=("2D-column", "2D", "3D", "0D"),
+    )
+    def test_non_1d_data_raises(self, shape: tuple[int, ...]) -> None:
+        """PolygonInput requires 1-D (bands,) data: one reduced scalar per band."""
+        with pytest.raises(ValueError, match="Polygon data must have shape"):
+            polygon_input(np.ma.MaskedArray(np.zeros(shape)))
+
+    def test_band_count_mismatch_raises(self) -> None:
+        """A non-empty bands tuple must match data.shape[0]."""
+        with pytest.raises(ValueError, match="does not match"):
+            PolygonInput(
+                data=np.ma.MaskedArray(np.zeros(2)),
+                geometry=SQUARE,
+                crs=CRS_EPSG_3857,
+                bands=(BandInfo("b1"),),
+            )
+
+    def test_frozen(self) -> None:
+        """PolygonInput is immutable."""
+        cov = polygon_input(np.ma.MaskedArray(np.zeros(2)))
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cov.data = np.ma.MaskedArray(np.zeros(2))  # type: ignore[misc]
+
+
+class TestImagedataToPolygonInput:
+    """Test the reduce-and-convert path from a clipped ImageData."""
+
+    def test_reduces_to_one_scalar_per_band(self) -> None:
+        """Each band's valid pixels reduce to a single scalar (mean here)."""
+        img = make_image(np.arange(32, dtype="float32").reshape(2, 4, 4))
+        cov = imagedata_to_polygon_input(img, geometry=SQUARE, stat=Stat.MEAN)
+
+        assert cov.data.shape == (2,)
+        # band 0 is 0..15 (mean 7.5); band 1 is 16..31 (mean 23.5)
+        assert cov.data.tolist() == [7.5, 23.5]
+        assert cov.geometry == SQUARE
+        assert cov.crs == CRS_EPSG_3857
+
+    def test_band_dtype_follows_reduced_not_source(self) -> None:
+        """The range dtype comes from the reduced array, not the source raster.
+
+        A ``mean`` over an int16 raster is float, so the band dtype (which drives
+        the CoverageJSON range value type) must be float, not the source int16.
+        """
+        img = make_image(np.arange(8, dtype="int16").reshape(2, 2, 2))
+        cov = imagedata_to_polygon_input(img, geometry=SQUARE, stat=Stat.MEAN)
+
+        assert all(np.dtype(band.dtype).kind == "f" for band in cov.bands)
+        assert cov.data.dtype == np.dtype(cov.bands[0].dtype)
+
+    def test_count_yields_integer_band_dtype(self) -> None:
+        """A ``count`` reduction yields an integer range even over a float raster."""
+        img = make_image(np.ones((2, 4, 4), dtype="float32"))
+        cov = imagedata_to_polygon_input(img, geometry=SQUARE, stat=Stat.COUNT)
+
+        assert all(np.dtype(band.dtype).kind == "i" for band in cov.bands)
+
+    def test_all_masked_band_reduces_to_masked_scalar(self) -> None:
+        """A band with no valid pixels becomes a masked scalar (serializes null)."""
+        arr = np.ma.MaskedArray(
+            np.ones((2, 4, 4), dtype="float32"),
+            mask=np.repeat([[False], [True]], 16).reshape(2, 4, 4),
+        )
+        cov = imagedata_to_polygon_input(
+            make_image(arr), geometry=SQUARE, stat=Stat.MEAN
+        )
+
+        assert not np.ma.getmaskarray(cov.data)[0]
+        assert np.ma.getmaskarray(cov.data)[1]
+
+    def test_bands_kwarg_supplies_names_and_units(self) -> None:
+        """Explicit bands supply names/units, but dtype is taken from the reduction."""
+        img = make_image(np.arange(8, dtype="int16").reshape(2, 2, 2))
+        bands = [BandInfo("red", unit="K"), BandInfo("nir", unit="K")]
+        cov = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.MEAN, bands=bands
+        )
+
+        assert [band.name for band in cov.bands] == ["red", "nir"]
+        assert [band.unit for band in cov.bands] == ["K", "K"]
+        # names/units kept, but the int16 declared dtype is replaced by the mean's float
+        assert all(np.dtype(band.dtype).kind == "f" for band in cov.bands)
+
+    def test_missing_crs_raises(self) -> None:
+        """An image without a CRS is rejected."""
+        with pytest.raises(ValueError, match="no CRS"):
+            imagedata_to_polygon_input(
+                make_image(crs=None), geometry=SQUARE, stat=Stat.MEAN
+            )
