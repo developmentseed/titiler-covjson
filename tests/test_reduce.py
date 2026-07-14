@@ -128,3 +128,44 @@ class TestReduceBands:
         reduced = reduce_each_band(_band([1.0, 2.0, 3.0, 4.0], dtype="int16"), stat)
 
         assert reduced.dtype.kind == expected_kind
+
+
+class TestStat:
+    """Test the Stat enum's self-describing metadata."""
+
+    @pytest.mark.parametrize(
+        ("stat", "label"),
+        [
+            (Stat.MIN, "min"),
+            (Stat.MAX, "max"),
+            (Stat.MEAN, "mean"),
+            (Stat.MEDIAN, "median"),
+            (Stat.STD, "std"),
+            (Stat.SUM, "sum"),
+            (Stat.COUNT, "valid pixel count"),
+        ],
+        ids=("min", "max", "mean", "median", "std", "sum", "count"),
+    )
+    def test_label(self, stat: Stat, label: str) -> None:
+        """Each stat has a human-readable label for a coverage parameter.
+
+        The wire value doubles as the label, except count ("valid pixel count").
+        """
+        assert stat.label == label
+
+    @pytest.mark.parametrize(
+        ("stat", "preserves"),
+        [
+            (Stat.MIN, True),
+            (Stat.MAX, True),
+            (Stat.MEAN, True),
+            (Stat.MEDIAN, True),
+            (Stat.STD, True),
+            (Stat.SUM, True),
+            (Stat.COUNT, False),
+        ],
+        ids=("min", "max", "mean", "median", "std", "sum", "count"),
+    )
+    def test_preserves_unit(self, stat: Stat, preserves: bool) -> None:
+        """Only count changes the unit (to dimensionless); the rest preserve it."""
+        assert stat.preserves_unit is preserves

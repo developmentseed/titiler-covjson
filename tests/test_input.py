@@ -763,6 +763,39 @@ class TestImagedataToPolygonInput:
         # names/units kept, but the int16 declared dtype is replaced by the mean's float
         assert all(np.dtype(band.dtype).kind == "f" for band in cov.bands)
 
+    def test_bands_describe_the_reduction(self) -> None:
+        """Each band's description names the reduction; count drops the unit.
+
+        The stat shapes the output metadata, not just the value: a
+        unit-preserving reduction keeps the source unit and prefixes the
+        description ("mean of precipitation"); count is a dimensionless valid
+        pixel count, so it drops the unit.
+        """
+        img = make_image(np.arange(4, dtype="float32").reshape(1, 2, 2))
+        band = BandInfo("b1", description="precipitation", unit="mm")
+
+        mean = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.MEAN, bands=[band]
+        )
+        assert mean.bands[0].description == "mean of precipitation"
+        assert mean.bands[0].unit == "mm"
+
+        count = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.COUNT, bands=[band]
+        )
+        assert count.bands[0].description == "valid pixel count of precipitation"
+        assert count.bands[0].unit == ""
+
+    def test_reduction_description_falls_back_to_band_name(self) -> None:
+        """With no band description, the reduction is named over the band name."""
+        img = make_image(np.zeros((1, 2, 2), dtype="float32"))
+
+        cov = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.MEAN, bands=[BandInfo("b1")]
+        )
+
+        assert cov.bands[0].description == "mean of b1"
+
     def test_missing_crs_raises(self) -> None:
         """An image without a CRS is rejected."""
         with pytest.raises(ValueError, match="no CRS"):

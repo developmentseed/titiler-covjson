@@ -1164,6 +1164,38 @@ def test_area_count_yields_integer_range(
     assert body["ranges"]["b2"]["values"] == [3]
 
 
+def test_area_parameter_records_the_reduction(
+    client: TestClient, unit_tagged_cog_path: str
+) -> None:
+    # The coverage self-describes the reduction: the parameter label names the
+    # stat, and count (a dimensionless pixel count) drops the source unit while a
+    # unit-preserving stat keeps it. (unit_tagged_cog band 1 is "red", in mm.)
+    mean = client.get(
+        "/area",
+        params={"url": unit_tagged_cog_path, "coords": _FULL_EXTENT_POLYGON, "bidx": 1},
+    )
+    assert mean.status_code == 200, mean.text
+    param = mean.json()["parameters"]["b1"]
+    assert param["observedProperty"]["label"] == {"en": "mean of red"}
+    assert param["unit"]["symbol"]["value"] == "mm"
+
+    count = client.get(
+        "/area",
+        params={
+            "url": unit_tagged_cog_path,
+            "coords": _FULL_EXTENT_POLYGON,
+            "bidx": 1,
+            "stat": "count",
+        },
+    )
+    assert count.status_code == 200, count.text
+    count_param = count.json()["parameters"]["b1"]
+    assert count_param["observedProperty"]["label"] == {
+        "en": "valid pixel count of red"
+    }
+    assert "unit" not in count_param
+
+
 def test_area_honors_holes(client: TestClient, tiny_cog_path: str) -> None:
     # A polygon with an interior ring round-trips through the endpoint: the
     # composite value carries both rings. (Hole parsing and modeling are

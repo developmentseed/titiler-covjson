@@ -809,24 +809,29 @@ def imagedata_to_polygon_input(
 
     This is the converter used by an area query: a raster clipped to a polygon
     (its outside-polygon and nodata pixels already masked) is reduced to one
-    scalar per band by ``stat``. Unlike the grid and point converters, the band
-    ``dtype`` is taken from the *reduced* array rather than the source raster: the
-    statistic determines the range's value type (``mean`` of an integer raster is
-    float; ``count`` is integer), so a supplied or resolved band's own dtype is
-    intentionally replaced. This keeps the range's declared type and its values in
-    agreement, which the grid and point paths get for free (there the band dtype
-    is the array dtype).
+    scalar per band by ``stat``. Unlike the grid and point converters, the
+    statistic shapes the per-band output metadata, not just its values:
 
-    Band names, descriptions, and units come from an explicit ``bands`` sequence
-    when given, otherwise from the image's own ``band_names`` with empty
-    descriptions and units.
+    - ``dtype`` is taken from the *reduced* array, not the source raster (``mean``
+      of an integer raster is float; ``count`` is integer), so the range's
+      declared type and its values agree (the grid and point paths get this for
+      free, where the band dtype is the array dtype);
+    - the ``description`` is rewritten to name the reduction (e.g.,
+      ``"mean of precipitation"``), so the coverage self-describes which statistic
+      produced the value;
+    - the ``unit`` is the source unit for a unit-preserving reduction, but dropped
+      for ``count`` (a dimensionless number of valid pixels).
+
+    Band names come from an explicit ``bands`` sequence when given, otherwise the
+    image's own ``band_names``.
 
     Args:
         img: The clipped source image, e.g., from ``Reader.feature()``.
         geometry: The polygon the reduced values summarize, in ``crs``.
         stat: The statistic to reduce each band by.
-        bands: Complete per-band metadata supplying names/units; the dtype is
-            overridden by the reduction. Defaults to the image's ``band_names``.
+        bands: Complete per-band metadata supplying the source names,
+            descriptions, and units; the dtype, description, and unit are all
+            derived from the reduction. Defaults to the image's ``band_names``.
         crs: CRS overriding ``img.crs``.
 
     Returns:
@@ -852,10 +857,16 @@ def imagedata_to_polygon_input(
     reduced = reduce_each_band(img.array, stat)
     resolved_crs = _require_crs(img, crs)
 
-    # The statistic sets the value type, so stamp every band's dtype from the
-    # reduced array; the names/units resolved here are what carry through.
+    # The statistic shapes each band's output metadata: dtype from the reduced
+    # array, a description naming the reduction, and the source unit (dropped for
+    # count, a dimensionless pixel count). Only the band name carries through.
     typed_bands = tuple(
-        replace(band, dtype=reduced.dtype)
+        replace(
+            band,
+            dtype=reduced.dtype,
+            description=f"{stat.label} of {band.description or band.name}",
+            unit=band.unit if stat.preserves_unit else "",
+        )
         for band in _resolve_bands(img, bands, None, None, None)
     )
 

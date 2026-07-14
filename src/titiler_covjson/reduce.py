@@ -19,11 +19,13 @@ import numpy as np
 class Stat(Enum):
     """A supported zonal-reduction statistic.
 
-    Each member selects the reduction :func:`reduce_each_band` applies over a band's
-    valid pixels. ``MIN``/``MAX``/``SUM`` keep the source integer or float kind;
-    ``MEAN``/``MEDIAN``/``STD`` promote to float; ``COUNT`` is an integer count of
-    valid pixels. Each member's lowercase ``value`` is the string form accepted
-    from a request (e.g., ``Stat.MEAN.value == "mean"``).
+    Each member's lowercase ``value`` is the wire form accepted from a request
+    (e.g. ``Stat.MEAN.value == "mean"``), and it doubles as the human-readable
+    ``label`` in a coverage parameter (``"mean of <band>"``). The exception is
+    ``count``, whose bare value is an ambiguous label, so it reads ``"valid pixel
+    count"``. ``MIN``/``MAX``/``SUM`` keep the source integer or float kind;
+    ``MEAN``/``MEDIAN``/``STD`` promote to float; ``COUNT`` is an integer,
+    dimensionless count of valid pixels (the one reduction that drops the unit).
     """
 
     MIN = "min"
@@ -33,6 +35,31 @@ class Stat(Enum):
     STD = "std"
     SUM = "sum"
     COUNT = "count"
+
+    @property
+    def label(self) -> str:
+        """A human-readable phrase naming the reduction, for a coverage parameter.
+
+        The wire ``value`` doubles as the label for every reduction whose name
+        reads well (``"mean"``, ``"sum"``, ...); ``count`` is the exception, since
+        a bare ``"count"`` is ambiguous.
+
+        Returns:
+            str: The reduction's human-readable name.
+        """
+        return "valid pixel count" if self is Stat.COUNT else self.value
+
+    @property
+    def preserves_unit(self) -> bool:
+        """Whether the reduction keeps the source band's unit.
+
+        Every reduction is of a quantity and carries its unit, except ``count``,
+        a dimensionless number of valid pixels.
+
+        Returns:
+            bool: ``True`` for every reduction except ``count``.
+        """
+        return self is not Stat.COUNT
 
 
 def reduce_each_band(
