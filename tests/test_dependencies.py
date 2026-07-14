@@ -3,10 +3,39 @@ from titiler.core.errors import BadRequestError
 
 from titiler_covjson.dependencies import (
     CovJSONBandParams,
+    area_stat,
     reject_vertical_selection,
     to_kwargs,
     validate_covjson_format,
 )
+from titiler_covjson.reduce import Stat
+
+
+def test_area_stat_defaults_to_mean() -> None:
+    """An absent `stat` selector defaults to the mean reduction."""
+    assert area_stat() is Stat.MEAN
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("min", Stat.MIN),
+        ("mean", Stat.MEAN),
+        ("median", Stat.MEDIAN),
+        ("count", Stat.COUNT),
+        ("MEAN", Stat.MEAN),
+    ],
+    ids=["min", "mean", "median", "count", "case-insensitive"],
+)
+def test_area_stat_parses_known_values(value: str, expected: Stat) -> None:
+    """Each supported statistic name resolves to its Stat member (case-folded)."""
+    assert area_stat(value) is expected
+
+
+def test_area_stat_rejects_unknown() -> None:
+    """An unrecognized statistic is a 400, not a 422 or a silent default."""
+    with pytest.raises(BadRequestError, match="Unsupported stat 'bogus'"):
+        area_stat("bogus")
 
 
 @pytest.mark.parametrize(

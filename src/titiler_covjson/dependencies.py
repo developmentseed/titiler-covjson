@@ -14,6 +14,8 @@ from typing import Annotated, Any
 from fastapi import Query
 from titiler.core.errors import BadRequestError
 
+from titiler_covjson.reduce import Stat
+
 _BAND_NAME = re.compile(r"^b(?P<idx>[1-9][0-9]*)$")
 
 
@@ -263,6 +265,53 @@ def reject_vertical_selection(
             "parameter."
         )
         raise BadRequestError(msg)
+
+
+def area_stat(
+    stat: Annotated[
+        str,
+        Query(
+            description=(
+                "Zonal reduction statistic over the polygon: one of min, max, "
+                "mean, median, std, sum, count. Defaults to mean."
+            ),
+        ),
+    ] = "mean",
+) -> Stat:
+    """Parse and validate the ``stat`` zonal-reduction selector for ``/area``.
+
+    Resolves the ``stat`` query value to a :class:`~titiler_covjson.reduce.Stat`
+    member (case-insensitively), defaulting to the mean. An unrecognized value is
+    rejected with ``BadRequestError`` (a 400, consistent with the other selector
+    guards) rather than FastAPI's native 422 for an invalid enum.
+
+    Args:
+        stat: The requested statistic name, defaulting to ``"mean"``.
+
+    Returns:
+        Stat: The resolved reduction statistic.
+
+    Raises:
+        BadRequestError: If ``stat`` is not a recognized statistic. The host
+            application's titiler exception handlers render this as a 400
+            response.
+
+    Examples:
+        >>> area_stat().value
+        'mean'
+        >>> area_stat("MEDIAN").value
+        'median'
+        >>> area_stat("bogus")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Unsupported stat 'bogus': ...
+    """
+    try:
+        return Stat(stat.casefold())
+    except ValueError:
+        allowed = ", ".join(member.value for member in Stat)
+        msg = f"Unsupported stat {stat!r}: expected one of {allowed}."
+        raise BadRequestError(msg) from None
 
 
 def _band_name_to_index(name: str) -> int:
