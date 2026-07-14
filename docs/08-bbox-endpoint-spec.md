@@ -254,7 +254,7 @@ The body is a CovJSON Grid `Coverage`, built by the existing model layer
 
 | Code | Condition |
 | --- | --- |
-| `400` | Unsupported `f` value; bbox exceeds the hard cell-count ceiling; more than one of `parameter-name` / `bidx` / `expression`; a band index out of range; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`). |
+| `400` | Unsupported `f` value; bbox exceeds the hard cell-count ceiling; more than one of `parameter-name` / `bidx` / `expression`; a band index out of range; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
 | `422` | Malformed path bbox (non-numeric segment), invalid or unsupported `crs`, or other FastAPI / Pydantic validation failure. |
 | `500` | Dataset open or read failure (e.g., an unreadable `url`), or an unexpected internal processing error. |
 
