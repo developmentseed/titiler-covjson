@@ -14,16 +14,23 @@ extension (a `titiler.core` factory), not a standalone service.
 
 ## Status
 
-Early alpha. The first end-to-end slice is implemented: a single bounding-box
-endpoint returning a 2-D Grid-domain coverage from one dataset.
+Early alpha. Three value-returning endpoints are implemented over a single
+dataset, each returning a CoverageJSON coverage in its own domain.
 
-- **Available:** `GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}`, returning a
-  Grid coverage with band selection (`bidx` / `expression` / the OGC API -
-  Environmental Data Retrieval (EDR) `parameter-name` alias), a single `crs`
-  knob, output sizing, and a cell-count ceiling.
-- **Planned:** point and transect queries, temporal (time series) extraction,
-  further coverage domains, and multi-dataset / SpatioTemporal Asset Catalog
-  (STAC) sources.
+- **Available:**
+  - `GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}`: a 2-D Grid coverage for a
+    bounding box, with output sizing and a cell-count ceiling.
+  - `GET {prefix}/position?coords=POINT(x y)`: a Point coverage sampling a
+    single location.
+  - `GET {prefix}/area?coords=POLYGON((...))`: a Polygon coverage reducing the
+    dataset over a polygon to one value per band by a `stat` (default `mean`).
+
+  All three support band selection (`bidx` / `expression` / the OGC API -
+  Environmental Data Retrieval (EDR) `parameter-name` alias) and a single `crs`
+  knob.
+- **Planned:** transect (trajectory) and tiled queries, temporal (time series)
+  extraction, further coverage domains, and multi-dataset / SpatioTemporal Asset
+  Catalog (STAC) sources.
 
 ## Installation
 
@@ -50,11 +57,15 @@ app.include_router(CovJSONFactory().router)
 add_exception_handlers(app, DEFAULT_STATUS_CODES)
 ```
 
-Then request a coverage for a bounding box (the four bounds are one
-comma-delimited path segment, interpreted in CRS84 by default):
+Then request a coverage. A bounding box returns a Grid (the four bounds are one
+comma-delimited path segment, interpreted in CRS84 by default), a position
+returns a Point, and a polygon returns a Polygon reduced to one value per band
+(WKT whitespace is percent-encoded as `%20`):
 
 ```bash
 curl "http://localhost:8000/bbox/-10,-5,10,5?url=/path/to/cog.tif"
+curl "http://localhost:8000/position?coords=POINT(0%200)&url=/path/to/cog.tif"
+curl "http://localhost:8000/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=/path/to/cog.tif"
 ```
 
 ## Overriding the dataset error status
@@ -84,14 +95,13 @@ add_exception_handlers(
 
 ## Run it with Docker
 
-A small demo container serves the `/bbox` endpoint against a bundled sample
-Cloud-Optimized GeoTIFF (COG), so you can try the format end to end without
-building your own application.
+A small demo container serves the `/bbox`, `/position`, and `/area` endpoints
+against a bundled sample Cloud-Optimized GeoTIFF (COG), so you can try the
+format end to end without building your own application.
 
-> **Local demo only.** This container serves an open `/bbox` endpoint that reads
-> whatever `url` you pass it, with no authentication. Run it on your own machine
-> for testing and confirmation; do not expose it publicly or on a shared
-> network.
+> **Local demo only.** This container serves an open API that reads whatever
+> `url` you pass it, with no authentication. Run it on your own machine for
+> testing and confirmation; do not expose it publicly or on a shared network.
 
 Build the image from the repository root (the trailing `.` build context is
 required, because the image installs the package from `src/`):
@@ -111,6 +121,8 @@ Request a coverage for the bundled sample COG (the response is
 
 ```bash
 curl "http://localhost:8000/bbox/-10,-5,10,5?url=/data/sample.tif&f=CoverageJSON"
+curl "http://localhost:8000/position?coords=POINT(0%200)&url=/data/sample.tif"
+curl "http://localhost:8000/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=/data/sample.tif"
 ```
 
 ### Use your own COG
@@ -161,11 +173,12 @@ documents predate the implementation and carry a superseded note where relevant.
 titiler-covjson/
 ├── src/titiler_covjson/
 │   ├── __init__.py       # public API: CovJSONFactory, CovJSONResponse, media type
-│   ├── factory.py        # CovJSONFactory(BaseFactory): the /bbox route
-│   ├── dependencies.py   # CovJSONBandParams, validate_covjson_format
+│   ├── factory.py        # CovJSONFactory(BaseFactory): /bbox, /position, /area
+│   ├── dependencies.py   # CovJSONBandParams, validate_covjson_format, area_stat
 │   ├── responses.py      # CovJSONResponse + COVJSON_MEDIA_TYPE
 │   ├── input.py          # CoverageInput intermediate representation
 │   ├── modeler.py        # to_coverage: CoverageInput -> covjson-pydantic models
+│   ├── reduce.py         # Stat + reduce_bands: per-band zonal reduction
 │   └── helpers.py        # CRS, unit, and dtype mapping utilities
 ├── tests/
 ├── docs/

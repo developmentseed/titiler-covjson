@@ -1,19 +1,20 @@
 """Minimal FastAPI app for locally exercising the CoverageJSON endpoints.
 
 Mounts the whole ``CovJSONFactory`` router, so it serves every endpoint the
-factory registers (``/bbox``, ``/position``, and any added later) — nothing here
-is per-endpoint. Run it with uvicorn from the repository root, with hot reload on
-a fixed dev port:
+factory registers (``/bbox``, ``/position``, ``/area``, and any added later);
+nothing here is per-endpoint. Run it with uvicorn from the repository root, with
+hot reload on a fixed dev port:
 
     uv run --with uvicorn uvicorn examples.dev_app:app --reload --port 8137
 
-For a zero-setup request, point ``url`` at the bundled sample COG — the same
-dataset the demo container serves, so a local dev loop and the container behave
+For a zero-setup request, point ``url`` at the bundled sample COG (the same
+dataset the demo container serves), so a local dev loop and the container behave
 alike. It is a relative path, resolved against the working directory the server
 runs from (the repository root, as above):
 
     curl "http://127.0.0.1:8137/bbox/-10,-5,10,5?url=docker/data/sample.tif"
     curl "http://127.0.0.1:8137/position?coords=POINT(0%200)&url=docker/data/sample.tif"
+    curl "http://127.0.0.1:8137/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=docker/data/sample.tif"
 
 Or point ``url`` at any rio-tiler-readable dataset of your own: a local COG, or
 an ``http(s)://`` / ``s3://`` asset href (e.g., one pulled from a STAC item):
