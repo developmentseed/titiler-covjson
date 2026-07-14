@@ -14,7 +14,14 @@ from covjson_pydantic.domain import CompactAxis, DomainType, ValuesAxis
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.unit import Symbol
 
-from titiler_covjson.input import BandInfo, GridInput, PointInput, Position
+from titiler_covjson.input import (
+    BandInfo,
+    GridInput,
+    PointInput,
+    Polygon,
+    PolygonInput,
+    Position,
+)
 from titiler_covjson.modeler import to_coverage
 
 
@@ -386,4 +393,152 @@ class TestPointCoverage:
         system = cov.domain.referencing[0].system
         assert system.type == "ProjectedCRS"
         assert system.id == "http://www.opengis.net/def/crs/EPSG/0/32637"
+        assert_schema_valid(cov)
+
+
+_SQUARE = Polygon(
+    rings=(((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)),)
+)
+
+
+def _polygon_input(
+    data: np.ma.MaskedArray[Any, np.dtype[Any]],
+    *,
+    geometry: Polygon | None = None,
+    bands: tuple[BandInfo, ...] = (),
+    crs: rasterio.CRS | None = None,
+) -> PolygonInput:
+    """Build a PolygonInput for modeler tests.
+
+    Args:
+        data: The masked data array, shaped ``(bands,)`` (one reduced scalar per
+            band).
+        geometry: The polygon; defaults to a 10x10 square with no holes.
+        bands: Per-band metadata; empty to let PolygonInput synthesize it.
+        crs: CRS for the input; defaults to EPSG:4326 (WGS84).
+
+    Returns:
+        PolygonInput: A polygon input over a fixed WGS84 geometry.
+    """
+    return PolygonInput(
+        data=data,
+        geometry=geometry or _SQUARE,
+        crs=crs or rasterio.CRS.from_epsg(4326),
+        bands=bands,
+    )
+
+
+class TestPolygonCoverage:
+    """Conversion of polygon (zonal-reduction) inputs to a Polygon Coverage."""
+
+    def test_single_band_polygon_is_schema_valid(self) -> None:
+        """A single-band polygon converts to a schema-valid Polygon Coverage."""
+        data = _masked([7.5], dtype="float32")
+        cov = to_coverage(_polygon_input(data, bands=(BandInfo("b1", unit="mm"),)))
+
+        assert isinstance(cov, Coverage)
+        assert cov.domain.domainType == DomainType.polygon
+
+        # A Polygon domain carries a single `composite` axis holding one polygon
+        # (the exterior ring plus any holes), tagged dataType "polygon".
+        composite = cov.domain.axes.composite
+        assert isinstance(composite, ValuesAxis)
+        assert composite.dataType == "polygon"
+        assert composite.coordinates == ["x", "y"]
+        assert len(composite.values) == 1
+
+        assert set(cov.ranges) == {"b1"}
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayFloat)
+        assert nd.axisNames == []
+        assert nd.shape == []
+        assert nd.values == [7.5]
+
+        # The composite axis serializes to the nested values -> polygon -> ring
+        # -> vertex structure (one polygon, one closed exterior ring).
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        assert dumped["domain"]["axes"]["composite"]["values"] == [
+            [[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]]]
+        ]
+
+        assert_schema_valid(cov)
+
+    def test_polygon_with_hole_is_schema_valid(self) -> None:
+        """A polygon with an interior ring (hole) keeps both rings, schema-valid."""
+        exterior = ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0))
+        hole = ((2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0), (2.0, 2.0))
+        data = _masked([1.0], dtype="float32")
+        cov = to_coverage(
+            _polygon_input(data, geometry=Polygon(rings=(exterior, hole)))
+        )
+
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        polygon = dumped["domain"]["axes"]["composite"]["values"][0]
+        assert len(polygon) == 2  # exterior + one hole
+        assert_schema_valid(cov)
+
+    def test_masked_value_serializes_as_null(self) -> None:
+        """A band with no valid pixels (masked scalar) serializes as JSON null."""
+        data = _masked([1.5], mask=[True], dtype="float32")
+        cov = to_coverage(_polygon_input(data, bands=(BandInfo("b1"),)))
+
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        assert dumped["ranges"]["b1"]["values"] == [None]
+        assert_schema_valid(cov)
+
+    def test_integer_reduction_produces_integer_range(self) -> None:
+        """An integer-typed reduction (e.g. a count) yields an NdArrayInt range."""
+        data = _masked([16], dtype="int64")
+        cov = to_coverage(_polygon_input(data, bands=(BandInfo("b1", dtype="int64"),)))
+
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayInt)
+        assert nd.values == [16]
+        assert_schema_valid(cov)
+
+    def test_multiple_bands_keep_order_and_names(self) -> None:
+        """Each band yields a scalar parameter and range keyed by its name."""
+        data = _masked([10.0, 20.0], dtype="float32")
+        cov = to_coverage(
+            _polygon_input(data, bands=(BandInfo("red"), BandInfo("nir")))
+        )
+
+        assert cov.parameters is not None
+        assert list(cov.parameters.root) == ["red", "nir"]
+        assert list(cov.ranges) == ["red", "nir"]
+        assert_schema_valid(cov)
+
+    def test_projected_crs_referencing(self) -> None:
+        """A projected CRS yields ProjectedCRS referencing in the domain."""
+        data = _masked([1.0], dtype="float32")
+        cov = to_coverage(_polygon_input(data, crs=rasterio.CRS.from_epsg(32637)))
+
+        assert cov.domain.referencing is not None
+        system = cov.domain.referencing[0].system
+        assert system.type == "ProjectedCRS"
+        assert system.id == "http://www.opengis.net/def/crs/EPSG/0/32637"
+        assert_schema_valid(cov)
+
+    def test_lat_first_crs_axis_order_divergence_is_intentional(self) -> None:
+        """A latitude-first CRS diverges the composite and referencing orders.
+
+        The ``composite`` axis always lists ``["x", "y"]`` (the vertex storage
+        order: longitude/easting then latitude/northing), while ``referencing``
+        lists the CRS's declared axis order, which is ``["y", "x"]`` for a
+        latitude-first CRS such as EPSG:4326. The two arrays describe different
+        things (vertex layout vs CRS axis order) and must stay divergent:
+        unifying them would make a strict consumer read a stored ``[lon, lat]``
+        vertex as ``[lat, lon]``. This locks that intent so the divergence is not
+        mistaken for a bug and "fixed".
+        """
+        data = _masked([1.0], dtype="float32")
+        cov = to_coverage(_polygon_input(data, crs=rasterio.CRS.from_epsg(4326)))
+
+        composite = cov.domain.axes.composite
+        assert isinstance(composite, ValuesAxis)
+        assert composite.coordinates == ["x", "y"]
+
+        assert cov.domain.referencing is not None
+        assert cov.domain.referencing[0].coordinates == ["y", "x"]
+
         assert_schema_valid(cov)

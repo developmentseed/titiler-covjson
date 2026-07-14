@@ -7,8 +7,9 @@ everything a CoverageJSON document needs: band descriptions and units,
 timestamps, source geometry, or collection/item provenance. This module
 defines the per-domain input variants
 that carry it: a shared base plus one frozen dataclass per domain
-(:class:`GridInput` and :class:`PointInput` now; a PointSeries variant follows),
-grouped under the :data:`CoverageInput` alias that endpoint code fills from
+(:class:`GridInput`, :class:`PointInput`, and :class:`PolygonInput` now; a
+PointSeries variant follows), grouped under the :data:`CoverageInput` alias that
+endpoint code fills from
 whatever it read and that the modeler consumes to build covjson-pydantic
 ``Coverage`` objects.
 
@@ -406,11 +407,11 @@ class PolygonInput(_CoverageInputBase):
             raise ValueError(msg)
 
 
-# Alias for the per-domain input union. GridInput and PointInput are both
-# members (the EDR /position slice, #44); the modeler's `match` dispatches on
-# each, and `assert_never` in its default arm enforces exhaustiveness as further
-# variants (e.g., PointSeriesInput) join.
-CoverageInput = GridInput | PointInput
+# Alias for the per-domain input union. GridInput, PointInput, and PolygonInput
+# are members; the modeler's `match` dispatches on each, and `assert_never` in
+# its default arm enforces exhaustiveness as further variants (e.g.,
+# PointSeriesInput) join.
+CoverageInput = GridInput | PointInput | PolygonInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
