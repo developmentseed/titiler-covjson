@@ -30,6 +30,7 @@ from typing import Annotated, Any
 
 import rasterio
 from attrs import define
+from covjson_pydantic.coverage import Coverage
 from fastapi import Depends, Path, Query
 from rasterio import windows
 from rasterio.io import DatasetReader
@@ -191,13 +192,8 @@ class CovJSONFactory(BaseFactory):
             )
 
             grid_input = _build_grid_input(image, info, band_kwargs, label_crs)
-            coverage = to_coverage(grid_input)
-            headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
 
-            return CovJSONResponse(
-                content=coverage.model_dump_json(exclude_none=True),
-                headers=headers,
-            )
+            return _covjson_response(to_coverage(grid_input), label_crs)
 
         @self.router.get(
             "/position",
@@ -243,13 +239,8 @@ class CovJSONFactory(BaseFactory):
             point_input = _build_point_input(
                 point, info, band_kwargs, position, label_crs
             )
-            coverage = to_coverage(point_input)
-            headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
 
-            return CovJSONResponse(
-                content=coverage.model_dump_json(exclude_none=True),
-                headers=headers,
-            )
+            return _covjson_response(to_coverage(point_input), label_crs)
 
         @self.router.get(
             "/area",
@@ -300,13 +291,30 @@ class CovJSONFactory(BaseFactory):
             polygon_input = _build_polygon_input(
                 image, info, band_kwargs, polygon, stat, label_crs
             )
-            coverage = to_coverage(polygon_input)
-            headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
 
-            return CovJSONResponse(
-                content=coverage.model_dump_json(exclude_none=True),
-                headers=headers,
-            )
+            return _covjson_response(to_coverage(polygon_input), label_crs)
+
+
+def _covjson_response(coverage: Coverage, label_crs: rasterio.CRS) -> CovJSONResponse:
+    """Serialize a coverage to a ``CovJSONResponse`` with the ``Content-Crs`` header.
+
+    The shared response epilogue for every route: serialize with
+    ``exclude_none=True`` (the CoverageJSON schema rejects explicit ``null``
+    members, though ``null`` *elements* inside a range's ``values`` are kept) and
+    advertise the output CRS as an OGC Uniform Resource Identifier (URI) in the
+    ``Content-Crs`` response header.
+
+    Args:
+        coverage: The coverage to serialize.
+        label_crs: The output (label) CRS, for the ``Content-Crs`` header.
+
+    Returns:
+        CovJSONResponse: The serialized CoverageJSON response.
+    """
+    return CovJSONResponse(
+        content=coverage.model_dump_json(exclude_none=True),
+        headers={"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"},
+    )
 
 
 def _read_bounded_image(
