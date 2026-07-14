@@ -19,7 +19,7 @@ import numpy as np
 class Stat(Enum):
     """A supported zonal-reduction statistic.
 
-    Each member selects the reduction :func:`reduce_bands` applies over a band's
+    Each member selects the reduction :func:`reduce_each_band` applies over a band's
     valid pixels. ``MIN``/``MAX``/``SUM`` keep the source integer or float kind;
     ``MEAN``/``MEDIAN``/``STD`` promote to float; ``COUNT`` is an integer count of
     valid pixels. Each member's lowercase ``value`` is the string form accepted
@@ -35,7 +35,7 @@ class Stat(Enum):
     COUNT = "count"
 
 
-def reduce_bands(
+def reduce_each_band(
     data: np.ma.MaskedArray[Any, np.dtype[Any]], stat: Stat
 ) -> np.ma.MaskedArray[Any, np.dtype[Any]]:
     """Reduce a multi-band masked array to one scalar per band.
@@ -63,16 +63,16 @@ def reduce_bands(
         >>> data = np.ma.MaskedArray(
         ...     np.array([[[1.0, 2.0], [3.0, 4.0]]], dtype="float32")
         ... )
-        >>> reduce_bands(data, Stat.MEAN).tolist()
+        >>> reduce_each_band(data, Stat.MEAN).tolist()
         [2.5]
 
         A band with no valid pixels reduces to masked for most statistics, but
         ``count`` reports zero:
 
         >>> masked = np.ma.MaskedArray(np.ones((1, 2, 2), dtype="float32"), mask=True)
-        >>> reduce_bands(masked, Stat.MEAN).tolist()
+        >>> reduce_each_band(masked, Stat.MEAN).tolist()
         [None]
-        >>> reduce_bands(masked, Stat.COUNT).tolist()
+        >>> reduce_each_band(masked, Stat.COUNT).tolist()
         [0]
     """
     # Flatten every non-band axis into one so a single axis=1 reduction serves

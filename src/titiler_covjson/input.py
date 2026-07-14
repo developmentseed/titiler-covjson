@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from titiler_covjson.reduce import Stat, reduce_bands
+from titiler_covjson.reduce import Stat, reduce_each_band
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -849,7 +849,7 @@ def imagedata_to_polygon_input(
         >>> cov.data.tolist()
         [1.5, 5.5]
     """
-    reduced = reduce_bands(img.array, stat)
+    reduced = reduce_each_band(img.array, stat)
     resolved_crs = _require_crs(img, crs)
 
     # The statistic sets the value type, so stamp every band's dtype from the

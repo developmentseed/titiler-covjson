@@ -278,7 +278,7 @@ class CovJSONFactory(BaseFactory):
             _validate_label_crs(label_crs)
             band_kwargs = to_kwargs(band_params)
 
-            image, info = _read_feature(
+            image, info = _read_polygon_image(
                 self.reader,
                 src_path,
                 polygon,
@@ -462,7 +462,7 @@ def _read_point(
     return point, info
 
 
-def _read_feature(
+def _read_polygon_image(
     reader: type[Reader],
     src_path: str,
     polygon: Polygon,

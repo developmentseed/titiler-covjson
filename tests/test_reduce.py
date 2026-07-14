@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from titiler_covjson.reduce import Stat, reduce_bands
+from titiler_covjson.reduce import Stat, reduce_each_band
 
 
 def _band(
@@ -29,7 +29,7 @@ def _band(
 
 
 class TestReduceBands:
-    """Test reduce_bands: one scalar per band over the non-band axes."""
+    """Test reduce_each_band: one scalar per band over the non-band axes."""
 
     @pytest.mark.parametrize(
         ("stat", "expected"),
@@ -46,7 +46,7 @@ class TestReduceBands:
     )
     def test_computes_each_stat(self, stat: Stat, expected: float) -> None:
         """Each statistic reduces a band's valid pixels to the right scalar."""
-        reduced = reduce_bands(_band([1.0, 2.0, 3.0, 4.0]), stat)
+        reduced = reduce_each_band(_band([1.0, 2.0, 3.0, 4.0]), stat)
 
         assert reduced.shape == (1,)
         assert reduced[0] == pytest.approx(expected)
@@ -54,7 +54,7 @@ class TestReduceBands:
     def test_returns_1d_masked_array(self) -> None:
         """The result is a 1-D masked array, one entry per band."""
         data = np.ma.MaskedArray(np.arange(8, dtype="float32").reshape(2, 2, 2))
-        reduced = reduce_bands(data, Stat.MEAN)
+        reduced = reduce_each_band(data, Stat.MEAN)
 
         assert isinstance(reduced, np.ma.MaskedArray)
         assert reduced.shape == (2,)
@@ -66,7 +66,7 @@ class TestReduceBands:
                 [[[0.0, 0.0], [0.0, 0.0]], [[10.0, 20.0], [30.0, 40.0]]], "float32"
             )
         )
-        reduced = reduce_bands(data, Stat.MAX)
+        reduced = reduce_each_band(data, Stat.MAX)
 
         assert reduced.tolist() == [0.0, 40.0]
 
@@ -84,7 +84,7 @@ class TestReduceBands:
                 [[True, True], [True, True]],
             ],
         )
-        reduced = reduce_bands(data, stat)
+        reduced = reduce_each_band(data, stat)
 
         assert not np.ma.getmaskarray(reduced)[0]
         assert np.ma.getmaskarray(reduced)[1]
@@ -98,7 +98,7 @@ class TestReduceBands:
                 [[True, True], [True, True]],
             ],
         )
-        reduced = reduce_bands(data, Stat.COUNT)
+        reduced = reduce_each_band(data, Stat.COUNT)
 
         assert not np.ma.getmaskarray(reduced).any()
         assert reduced.tolist() == [4, 0]
@@ -125,6 +125,6 @@ class TestReduceBands:
         while ``mean``/``median``/``std`` promote to float, so the CoverageJSON
         range value type must be chosen from the reduced array, not the source.
         """
-        reduced = reduce_bands(_band([1.0, 2.0, 3.0, 4.0], dtype="int16"), stat)
+        reduced = reduce_each_band(_band([1.0, 2.0, 3.0, 4.0], dtype="int16"), stat)
 
         assert reduced.dtype.kind == expected_kind
