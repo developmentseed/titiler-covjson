@@ -641,6 +641,22 @@ class TestPolygon:
         with pytest.raises(ValueError, match="must be finite"):
             Polygon(rings=(((0.0, 0.0), (bad, 0.0), (1.0, 1.0), (0.0, 0.0)),))
 
+    def test_bounds(self) -> None:
+        """bounds is the (minx, miny, maxx, maxy) box of the exterior ring."""
+        # An asymmetric extent (x 1..7, y 2..3) so an x/y swap would be caught.
+        poly = Polygon(
+            rings=(((1.0, 2.0), (7.0, 2.0), (7.0, 3.0), (1.0, 3.0), (1.0, 2.0)),)
+        )
+
+        assert poly.bounds == (1.0, 2.0, 7.0, 3.0)
+
+    def test_bounds_from_exterior_ring_only(self) -> None:
+        """The bounding box comes from the exterior ring, not interior holes."""
+        exterior = ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0))
+        hole = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0))
+
+        assert Polygon(rings=(exterior, hole)).bounds == (0.0, 0.0, 4.0, 4.0)
+
     def test_frozen(self) -> None:
         """Polygon is immutable."""
         with pytest.raises(dataclasses.FrozenInstanceError):

@@ -282,6 +282,7 @@ class CovJSONFactory(BaseFactory):
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
             polygon = _parse_polygon_wkt(coords)
+            _reject_degenerate_polygon(polygon)
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)
             band_kwargs = to_kwargs(band_params)
@@ -470,16 +471,21 @@ def _read_feature(
     nodata pixels) are masked. Returns the clipped image alongside the reader's
     dataset ``info``. A polygon outside the dataset does not raise: rio-tiler's
     ``feature`` returns an all-masked array, which the caller reduces to ``null``.
+    An out-of-range band index, or a bounding box over the cell-count ceiling, is
+    rejected with ``BadRequestError`` by the guards this calls (rendered as a 400
+    by the host application's titiler exception handlers).
 
     The read is bounded before allocation, since it is native-resolution (no
     ``max_size``, so a downstream zonal statistic stays exact) and an enormous
     polygon would otherwise allocate an enormous array. The bounding box is
-    measured conservatively on the source pixel grid (reprojecting to the source
-    CRS when the read reprojects) and a read over the cell-count ceiling is
-    rejected. Unlike the bounding-box path (:func:`_resolve_grid_dimensions`),
-    this does not reject a sub-pixel-thin polygon: a tiny polygon reads a tiny
-    window and reduces to ``null`` or a single value, which the empty-polygon
-    contract already allows.
+    measured on the destination grid ``feature`` will produce (via
+    :func:`_output_grid_dimensions`, the same dimensions the ``/bbox`` path vets),
+    so a reprojection that stretches the destination grid (Web Mercator near the
+    poles) far beyond the source window is bounded, not under-counted. This does
+    not reject a sub-pixel-thin polygon: a tiny polygon reads a tiny window and
+    reduces to ``null`` or a single value, which the empty-polygon contract
+    already allows. A degenerate (zero-area) polygon is rejected earlier, in the
+    route, before the dataset is opened.
 
     Args:
         reader: The rio-tiler reader type used to open ``src_path``.
@@ -494,64 +500,31 @@ def _read_feature(
 
     Returns:
         tuple[ImageData, Info]: The clipped image and the reader's dataset info.
-
-    Raises:
-        BadRequestError: If a requested band index is out of range, the polygon's
-            bounding box is degenerate (zero width or height), or the bounding box
-            exceeds the cell-count ceiling. The host application's titiler
-            exception handlers render this as a 400 response.
     """
     geometry = {
         "type": "Polygon",
         "coordinates": [[list(vertex) for vertex in ring] for ring in polygon.rings],
     }
-    exterior = polygon.rings[0]
-    bounds = (
-        min(x for x, _ in exterior),
-        min(y for _, y in exterior),
-        max(x for x, _ in exterior),
-        max(y for _, y in exterior),
-    )
 
     with reader(src_path) as src_dst:
         info = src_dst.info()
         _validate_band_indexes(band_kwargs.get("indexes"), info)
 
-        # Measure the bounding box on the source pixel grid (the same reprojection
-        # step _resolve_grid_dimensions uses) to bound the native read before it
-        # allocates. This is a conservative upper bound, not the exact output
-        # grid: it never under-counts a huge read, and the post-read check below
-        # is the exact backstop.
-        dataset = src_dst.dataset
-        source_bounds = (
-            transform_bounds(read_crs, dataset.crs, *bounds)
-            if read_crs != dataset.crs
-            else bounds
+        # Bound the read on the destination grid feature() will allocate (the same
+        # dimensions _resolve_grid_dimensions vets for /bbox), not a source-grid
+        # measure. `polygon.bounds` is non-degenerate: the route rejects a
+        # zero-extent polygon before the dataset is opened, so the dimension
+        # computation's aspect-ratio division is safe.
+        grid_width, grid_height = _output_grid_dimensions(
+            src_dst.dataset,
+            polygon.bounds,
+            read_crs=read_crs,
+            width=None,
+            height=None,
+            max_size=None,
         )
-        window = windows.from_bounds(*source_bounds, transform=dataset.transform)
-        width, height = abs(window.width), abs(window.height)
-
-        # A zero-width or zero-height (or, defensively, non-finite) bounding box
-        # is a degenerate polygon (a point or a line): feature() cannot sample it
-        # (rio-tiler raises "Cannot invert geotransform"), and math.ceil would
-        # choke on a non-finite value. Reject it as a 400 before the read. A
-        # sub-pixel but nonzero polygon is NOT rejected: it reads a tiny window
-        # and reduces to null or a single value.
-        finite = math.isfinite(width) and math.isfinite(height)
-
-        if not finite or width == 0 or height == 0:
-            msg = (
-                "Polygon area is degenerate: its bounding box has zero width or "
-                "height (a point or a line). Provide a polygon covering a nonzero "
-                "area."
-            )
-            raise BadRequestError(msg)
-
         _enforce_cell_ceiling(
-            math.ceil(width),
-            math.ceil(height),
-            max_cells=max_cells,
-            grid_label="Requested",
+            grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
         )
 
         image = src_dst.feature(
@@ -799,6 +772,47 @@ def _parse_ring(ring: str) -> tuple[tuple[float, float], ...]:
     return tuple(vertices)
 
 
+def _reject_degenerate_polygon(polygon: Polygon) -> None:
+    """Reject a degenerate polygon (a point or an axis-aligned line) before I/O.
+
+    A polygon whose bounding box has zero width or height cannot bound an area to
+    reduce: rio-tiler's ``feature`` cannot sample it (it raises "Cannot invert
+    geotransform"). Degeneracy is a pure property of the geometry, so it is
+    checked in the route before the dataset is opened, mirroring
+    :func:`_validate_bbox` for the ``/bbox`` path (a sub-pixel but nonzero polygon
+    is not rejected: it reads as a tiny window).
+
+    Args:
+        polygon: The parsed request polygon.
+
+    Raises:
+        BadRequestError: If the polygon's bounding box has zero width or height.
+            The host application's titiler exception handlers render this as a 400
+            response.
+
+    Examples:
+        A polygon collapsed to a point (or an axis-aligned line) is rejected:
+
+        >>> from titiler_covjson.input import Polygon
+        >>> _reject_degenerate_polygon(
+        ...     Polygon(rings=(((5.0, 5.0), (5.0, 5.0), (5.0, 5.0), (5.0, 5.0)),))
+        ... )
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Polygon area is degenerate: its
+        bounding box has zero width or height (a point or a line). Provide a
+        polygon covering a nonzero area.
+    """
+    minx, miny, maxx, maxy = polygon.bounds
+
+    if minx == maxx or miny == maxy:
+        msg = (
+            "Polygon area is degenerate: its bounding box has zero width or height "
+            "(a point or a line). Provide a polygon covering a nonzero area."
+        )
+        raise BadRequestError(msg)
+
+
 def _validate_output_dimensions(width: int | None, height: int | None) -> None:
     """Reject a non-positive explicit output ``width`` or ``height``.
 
@@ -829,7 +843,7 @@ def _validate_output_dimensions(width: int | None, height: int | None) -> None:
             raise BadRequestError(msg)
 
 
-def _resolve_grid_dimensions(
+def _output_grid_dimensions(
     dataset: DatasetReader,
     bounds: tuple[float, float, float, float],
     *,
@@ -838,10 +852,10 @@ def _resolve_grid_dimensions(
     height: int | None,
     max_size: int | None,
 ) -> tuple[int, int]:
-    """Resolve the output grid dimensions rio-tiler's ``part`` will produce.
+    """Compute the output grid dimensions rio-tiler's ``part``/``feature`` produces.
 
-    Mirrors the dimension logic in ``rio_tiler.reader.part`` so the resulting
-    cell count can be checked against the ceiling before the array is read:
+    Mirrors the dimension logic in ``rio_tiler.reader.part`` so the resulting cell
+    count can be checked against the ceiling before the array is read:
 
     - both ``width`` and ``height`` given: returned unchanged (``part`` ignores
       ``max_size`` then);
@@ -849,6 +863,15 @@ def _resolve_grid_dimensions(
       ratio (``part`` upsamples the given dimension);
     - neither given: ``max_size`` caps the longer axis of the read window, or,
       when ``max_size`` is also ``None``, the native window is read.
+
+    A reprojecting read (``read_crs != dataset.crs``) is measured on the
+    *destination* VRT grid, which Web Mercator stretches near the poles far beyond
+    the same box on the source pixel grid, so bounding a reprojecting read on the
+    source grid would under-count it by orders of magnitude. Unlike
+    :func:`_resolve_grid_dimensions`, this only computes dimensions; it does not
+    reject a too-thin box (the ``/area`` read is permissive: a sub-pixel polygon
+    reads a tiny window). The caller must pass a non-degenerate box (non-zero
+    width and height), so the aspect-ratio division is safe.
 
     Args:
         dataset: The open rasterio dataset, for the read-window geometry.
@@ -863,18 +886,12 @@ def _resolve_grid_dimensions(
     Returns:
         tuple[int, int]: The resolved ``(width, height)``.
 
-    Raises:
-        BadRequestError: If neither dimension is given and the bounding box
-            spans less than half a source pixel in an axis (too thin to sample).
-            The host application's titiler exception handlers render this as a
-            400 response.
-
     Examples:
         Both dimensions given are returned unchanged; this is the only case that
         short-circuits before the read window is consulted, so ``dataset`` and
         ``bounds`` are unused (hence the placeholder values below):
 
-        >>> _resolve_grid_dimensions(
+        >>> _output_grid_dimensions(
         ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
         ...     max_size=None,
         ... )
@@ -889,11 +906,9 @@ def _resolve_grid_dimensions(
     if width is not None and height is not None:
         return width, height
 
-    reprojecting = read_crs != dataset.crs
-
     # Match part's read window: the reprojected VRT grid when the read
     # reprojects, else the native window over the source transform.
-    if reprojecting:
+    if read_crs != dataset.crs:
         _, window_width, window_height = get_vrt_transform(
             dataset, bounds, height, width, dst_crs=read_crs
         )
@@ -901,25 +916,99 @@ def _resolve_grid_dimensions(
         window = windows.from_bounds(*bounds, transform=dataset.transform)
         window_width, window_height = window.width, window.height
 
-    # Take the aspect ratio first, then multiply, matching part's exact float
-    # association so the derived dimension is bit-identical to what it produces.
-    ratio = window_height / window_width
-
+    # Aspect ratio first, then multiply, matching part's exact float association
+    # so the derived dimension is bit-identical to what it produces. Taken only in
+    # the lone-dimension branches, where the read window is non-empty.
     if width is not None:
-        return width, math.ceil(width * ratio)
+        return width, math.ceil(width * (window_height / window_width))
 
     if height is not None:
-        return math.ceil(height / ratio), height
+        return math.ceil(height / (window_height / window_width)), height
 
-    # Neither dimension was given, so reject a box too thin to sample: one
-    # covering less than half a source pixel in an axis has no data to sample and
-    # would read as a single value stretched across the extent. Measure the box on
-    # the source pixel grid (reprojecting the bounds to the source CRS first when
-    # the read reprojects), which is uniform at every latitude. The destination
-    # grid is not: rio-tiler clamps its resolution near the poles, so measuring
-    # there would misjudge ordinary reads of a global dataset.
+    if max_size is None:
+        return round(window_width), round(window_height)
+
+    return _scale_to_max_size(max_size, round(window_width), round(window_height))
+
+
+def _resolve_grid_dimensions(
+    dataset: DatasetReader,
+    bounds: tuple[float, float, float, float],
+    *,
+    read_crs: rasterio.CRS,
+    width: int | None,
+    height: int | None,
+    max_size: int | None,
+) -> tuple[int, int]:
+    """Resolve the ``part`` output dimensions, rejecting a too-thin bounding box.
+
+    The bounding-box (``/bbox``) contract: :func:`_output_grid_dimensions`, but
+    when the size is left entirely to the read window (neither ``width`` nor
+    ``height`` given) a box spanning less than half a source pixel in an axis is
+    rejected, since it has no data to sample and would read as a single value
+    stretched across the extent.
+
+    Args:
+        dataset: The open rasterio dataset, for the read-window geometry.
+        bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
+        read_crs: The CRS the bounds are expressed in and that the read reprojects
+            to.
+        width: The requested output width, or ``None``.
+        height: The requested output height, or ``None``.
+        max_size: The longest-output-dimension cap, or ``None`` to read native.
+
+    Returns:
+        tuple[int, int]: The resolved ``(width, height)``.
+
+    Examples:
+        >>> _resolve_grid_dimensions(
+        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
+        ...     max_size=None,
+        ... )
+        (256, 128)
+    """
+    # A too-thin box is rejected with a BadRequestError by the guard this calls
+    # (rendered as a 400 by the host application's titiler exception handlers).
+    if width is None and height is None:
+        _reject_subpixel_bbox(dataset, bounds, read_crs)
+
+    return _output_grid_dimensions(
+        dataset,
+        bounds,
+        read_crs=read_crs,
+        width=width,
+        height=height,
+        max_size=max_size,
+    )
+
+
+def _reject_subpixel_bbox(
+    dataset: DatasetReader,
+    bounds: tuple[float, float, float, float],
+    read_crs: rasterio.CRS,
+) -> None:
+    """Reject a bounding box spanning less than half a source pixel in an axis.
+
+    Measures the box on the source pixel grid (reprojecting the bounds to the
+    source CRS first when the read reprojects), which is uniform at every
+    latitude. The destination grid is not: rio-tiler clamps its resolution near
+    the poles, so measuring there would misjudge ordinary reads of a global
+    dataset.
+
+    Args:
+        dataset: The open rasterio dataset, for the source pixel grid.
+        bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
+        read_crs: The CRS the bounds are expressed in.
+
+    Raises:
+        BadRequestError: If the box spans less than half a source pixel in an
+            axis. The host application's titiler exception handlers render this as
+            a 400 response.
+    """
     source_bounds = (
-        transform_bounds(read_crs, dataset.crs, *bounds) if reprojecting else bounds
+        transform_bounds(read_crs, dataset.crs, *bounds)
+        if read_crs != dataset.crs
+        else bounds
     )
     source_window = windows.from_bounds(*source_bounds, transform=dataset.transform)
 
@@ -930,11 +1019,6 @@ def _resolve_grid_dimensions(
             "and height."
         )
         raise BadRequestError(msg)
-
-    if max_size is None:
-        return round(window_width), round(window_height)
-
-    return _scale_to_max_size(max_size, round(window_width), round(window_height))
 
 
 def _scale_to_max_size(

@@ -11,6 +11,7 @@ from titiler.core.errors import BadRequestError
 
 from titiler_covjson.factory import (
     CovJSONFactory,
+    _output_grid_dimensions,
     _parse_point_wkt,
     _parse_polygon_wkt,
     _resolve_grid_dimensions,
@@ -541,6 +542,37 @@ def test_resolve_grid_dimensions_matches_rio_tiler(
         )
 
     assert predicted == (image.width, image.height)
+
+
+def test_output_grid_dimensions_does_not_reject_subpixel(cog_path: str) -> None:
+    # _output_grid_dimensions only computes the dimensions rio-tiler will read;
+    # unlike _resolve_grid_dimensions it does NOT reject a sub-pixel-thin box.
+    # The /area read is permissive: a tiny polygon reads a tiny window (feature()
+    # rounds up to 1x1), so the ceiling helper must not raise on a thin box.
+    crs4326 = rasterio.CRS.from_epsg(4326)
+    thin = (-0.001, -0.001, 0.001, 0.001)  # far thinner than one source pixel
+
+    with Reader(cog_path) as src:
+        with pytest.raises(BadRequestError, match="too thin"):
+            _resolve_grid_dimensions(
+                src.dataset,
+                thin,
+                read_crs=crs4326,
+                width=None,
+                height=None,
+                max_size=None,
+            )
+
+        dims = _output_grid_dimensions(
+            src.dataset,
+            thin,
+            read_crs=crs4326,
+            width=None,
+            height=None,
+            max_size=None,
+        )
+
+    assert dims == (0, 0)
 
 
 def test_bbox_rejects_oversized_output_grid(
@@ -1192,6 +1224,40 @@ def test_area_rejects_degenerate_polygon(
     response = client.get("/area", params={"url": tiny_cog_path, "coords": coords})
     assert response.status_code == 400, response.text
     assert "degenerate" in response.json()["detail"]
+
+
+def test_area_degenerate_polygon_rejected_before_read(client: TestClient) -> None:
+    # Degeneracy is a pure geometric property of the polygon, so it is checked
+    # before the dataset is opened: a degenerate polygon with an unreadable url is
+    # a 400 (degenerate), not a 500 from the dataset open. (/bbox rejects a
+    # degenerate box pre-I/O the same way.)
+    response = client.get(
+        "/area",
+        params={"url": "/no/such/file.tif", "coords": "POLYGON((5 5, 5 5, 5 5, 5 5))"},
+    )
+    assert response.status_code == 400, response.text
+    assert "degenerate" in response.json()["detail"]
+
+
+def test_area_reprojected_read_bounded_on_destination_grid(
+    client: TestClient, cog_path: str
+) -> None:
+    # A projected-CRS read is produced on the DESTINATION grid. Over a
+    # low-latitude source, an extreme-y Web Mercator polygon reprojects to a
+    # destination grid of ~163M cells while its source-grid footprint is only
+    # ~83k, so a source-grid ceiling would pass it and feature() would allocate
+    # multiple GB. The ceiling must measure the destination grid feature() will
+    # produce and reject the read before it allocates.
+    coords = (
+        "POLYGON((-500000 -1e12, 500000 -1e12, 500000 1e12, -500000 1e12, "
+        "-500000 -1e12))"
+    )
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": coords, "crs": "EPSG:3857"},
+    )
+    assert response.status_code == 400, response.text
+    assert "exceeds limit" in response.json()["detail"]
 
 
 def test_area_rejects_oversized_polygon(
