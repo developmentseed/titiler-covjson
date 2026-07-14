@@ -277,7 +277,7 @@ class GridInput(_CoverageInputBase):
 
     ``data`` is a 3-D masked array shaped ``(bands, height, width)``; ``bounds``
     gives its spatial extent in ``crs``. This is the variant
-    :func:`imagedata_to_coverage_input` produces from a rio-tiler ``ImageData``.
+    :func:`imagedata_to_grid_input` produces from a rio-tiler ``ImageData``.
 
     Attributes:
         bounds: Spatial bounds as ``(west, south, east, north)``, in ``crs``.
@@ -322,7 +322,7 @@ class PointInput(_CoverageInputBase):
 
     ``data`` is a 1-D masked array shaped ``(bands,)``: one sampled value per
     band at a single location. ``position`` gives that location in ``crs``. This
-    is the variant :func:`pointdata_to_coverage_input` produces from a rio-tiler
+    is the variant :func:`pointdata_to_point_input` produces from a rio-tiler
     ``PointData``, whose ``array`` is already 1-D per band.
 
     Attributes:
@@ -421,7 +421,7 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
     metadata into a :class:`CoverageInput`::
 
         info = band_info_from_reader_info(reader.info())
-        coverage_input = imagedata_to_coverage_input(img, bands=info)
+        coverage_input = imagedata_to_grid_input(img, bands=info)
 
     Band names and descriptions come from ``info.band_descriptions``; units
     are probed from the per-band GDAL tags in ``info.band_metadata`` using,
@@ -616,7 +616,7 @@ def _require_crs(
     return resolved_crs
 
 
-def imagedata_to_coverage_input(
+def imagedata_to_grid_input(
     img: ImageData,
     *,
     bands: Sequence[BandInfo] | None = None,
@@ -671,7 +671,7 @@ def imagedata_to_coverage_input(
         ...     crs=rasterio.CRS.from_epsg(4326),
         ...     bounds=(-10.0, -5.0, 10.0, 5.0),
         ... )
-        >>> cov = imagedata_to_coverage_input(img)
+        >>> cov = imagedata_to_grid_input(img)
         >>> cov.bounds
         (-10.0, -5.0, 10.0, 5.0)
         >>> [band.name for band in cov.bands]
@@ -689,7 +689,7 @@ def imagedata_to_coverage_input(
         ...     crs=rasterio.CRS.from_epsg(4326),
         ...     bounds=(-10.0, -5.0, 10.0, 5.0),
         ... )
-        >>> cov = imagedata_to_coverage_input(img)
+        >>> cov = imagedata_to_grid_input(img)
         >>> cov.data
         masked_array(
           data=[[[42.0, --],
@@ -716,7 +716,7 @@ def imagedata_to_coverage_input(
     )
 
 
-def pointdata_to_coverage_input(
+def pointdata_to_point_input(
     point: PointData,
     *,
     position: Position,
@@ -760,7 +760,7 @@ def pointdata_to_coverage_input(
         ...     np.ma.MaskedArray(np.array([1.5, 2.5], dtype="float32")),
         ...     crs=rasterio.CRS.from_epsg(4326),
         ... )
-        >>> cov = pointdata_to_coverage_input(point, position=Position(-5.0, 2.5))
+        >>> cov = pointdata_to_point_input(point, position=Position(-5.0, 2.5))
         >>> cov.data.shape
         (2,)
         >>> [band.name for band in cov.bands]

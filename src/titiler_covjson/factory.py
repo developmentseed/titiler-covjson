@@ -61,8 +61,8 @@ from titiler_covjson.input import (
     PointInput,
     Position,
     band_info_from_reader_info,
-    imagedata_to_coverage_input,
-    pointdata_to_coverage_input,
+    imagedata_to_grid_input,
+    pointdata_to_point_input,
 )
 from titiler_covjson.modeler import to_coverage
 from titiler_covjson.responses import CovJSONResponse
@@ -820,7 +820,7 @@ def _build_grid_input(
     """
     bands = _resolve_read_bands(image, info, band_kwargs)
 
-    return imagedata_to_coverage_input(image, bands=bands, crs=crs)
+    return imagedata_to_grid_input(image, bands=bands, crs=crs)
 
 
 def _build_point_input(
@@ -848,7 +848,7 @@ def _build_point_input(
     """
     bands = _resolve_read_bands(point, info, band_kwargs)
 
-    return pointdata_to_coverage_input(point, position=position, bands=bands, crs=crs)
+    return pointdata_to_point_input(point, position=position, bands=bands, crs=crs)
 
 
 def _resolve_read_bands(

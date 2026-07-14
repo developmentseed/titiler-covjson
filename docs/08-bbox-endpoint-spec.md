@@ -201,7 +201,7 @@ true physical values), is supported via `DatasetParams`.
 ## 9. Response body
 
 The body is a CovJSON Grid `Coverage`, built by the existing model layer
-(`imagedata_to_coverage_input` -> `to_coverage`) and serialized with
+(`imagedata_to_grid_input` -> `to_coverage`) and serialized with
 `model_dump_json(exclude_none=True)`. Its shape:
 
 - `domain.domainType` is `Grid`.
