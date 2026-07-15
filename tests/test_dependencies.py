@@ -16,6 +16,15 @@ def test_area_stat_defaults_to_mean() -> None:
     assert area_stat() is Stat.MEAN
 
 
+def test_area_stat_empty_defaults_to_mean() -> None:
+    """A present-but-empty `stat` defaults to the mean, as an absent one does.
+
+    A blank query value (``?stat=``) is treated as absent, matching the other
+    selector guards, rather than rejected as an unrecognized statistic.
+    """
+    assert area_stat("") is Stat.MEAN
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

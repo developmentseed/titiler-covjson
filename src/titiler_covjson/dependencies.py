@@ -18,6 +18,9 @@ from titiler_covjson.reduce import Stat
 
 _BAND_NAME = re.compile(r"^b(?P<idx>[1-9][0-9]*)$")
 
+# The default zonal-reduction statistic, applied when `stat` is absent or blank.
+_DEFAULT_STAT = "mean"
+
 
 @dataclass
 class CovJSONBandParams:
@@ -276,14 +279,16 @@ def area_stat(
                 "mean, median, std, sum, count. Defaults to mean."
             ),
         ),
-    ] = "mean",
+    ] = _DEFAULT_STAT,
 ) -> Stat:
     """Parse and validate the ``stat`` zonal-reduction selector for ``/area``.
 
     Resolves the ``stat`` query value to a :class:`~titiler_covjson.reduce.Stat`
-    member (case-insensitively), defaulting to the mean. An unrecognized value is
-    rejected with ``BadRequestError`` (a 400, consistent with the other selector
-    guards) rather than FastAPI's native 422 for an invalid enum.
+    member (case-insensitively), defaulting to the mean when absent or blank (a
+    blank ``?stat=`` is treated as absent, matching the other selector guards). An
+    unrecognized value is rejected with ``BadRequestError`` (a 400, consistent
+    with the other selector guards) rather than FastAPI's native 422 for an
+    invalid enum.
 
     Args:
         stat: The requested statistic name, defaulting to ``"mean"``.
@@ -299,6 +304,8 @@ def area_stat(
     Examples:
         >>> area_stat().value
         'mean'
+        >>> area_stat("").value
+        'mean'
         >>> area_stat("MEDIAN").value
         'median'
         >>> area_stat("bogus")
@@ -307,7 +314,7 @@ def area_stat(
         titiler.core.errors.BadRequestError: Unsupported stat 'bogus': ...
     """
     try:
-        return Stat(stat.casefold())
+        return Stat(stat.casefold() or _DEFAULT_STAT)
     except ValueError:
         allowed = ", ".join(member.value for member in Stat)
         msg = f"Unsupported stat {stat!r}: expected one of {allowed}."

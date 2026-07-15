@@ -1144,6 +1144,24 @@ def test_area_stat_selects_reduction(
     assert response.json()["ranges"]["b1"]["values"] == [expected]
 
 
+def test_area_empty_stat_defaults_to_mean(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A blank `stat` (?stat=) is treated as absent and defaults to the mean (band
+    # 1's pixels 0, 1, 2, 3 -> 1.5), not rejected with a 400 for an empty value.
+    response = client.get(
+        "/area",
+        params={
+            "url": tiny_cog_path,
+            "coords": _FULL_EXTENT_POLYGON,
+            "bidx": 1,
+            "stat": "",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b1"]["values"] == [1.5]
+
+
 def test_area_count_yields_integer_range(
     client: TestClient, tiny_cog_path: str
 ) -> None:
