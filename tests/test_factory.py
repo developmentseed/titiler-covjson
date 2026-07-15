@@ -1271,6 +1271,20 @@ def test_area_degenerate_polygon_rejected_before_read(client: TestClient) -> Non
     assert "degenerate" in response.json()["detail"]
 
 
+def test_area_degenerate_exterior_with_sampleable_hole_is_served(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # The degeneracy guard measures the box spanning ALL rings (what feature()
+    # reads), not the exterior alone. A zero-area exterior paired with an interior
+    # ring that has area still bounds a sampleable read, so it is served (200),
+    # not rejected as degenerate. Only a geometry degenerate across every ring
+    # yields an unsampleable read and a 400.
+    coords = "POLYGON((0 -5, 0 5, 0 0, 0 -5), (-3 -3, 3 -3, 3 3, -3 3, -3 -3))"
+    response = client.get("/area", params={"url": tiny_cog_path, "coords": coords})
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]
+
+
 def test_area_reprojected_read_bounded_on_destination_grid(
     client: TestClient, cog_path: str
 ) -> None:
@@ -1292,6 +1306,27 @@ def test_area_reprojected_read_bounded_on_destination_grid(
     assert "exceeds limit" in response.json()["detail"]
 
 
+def test_area_reprojected_hole_beyond_exterior_bounded_before_read(
+    client: TestClient, cog_path: str
+) -> None:
+    # The reproject dest-grid ceiling and the all-rings bound compose: a tiny
+    # exterior with an interior ring (hole) at extreme Web Mercator latitude
+    # reprojects to a destination grid of hundreds of millions of cells. Because
+    # the ceiling measures the box spanning ALL rings on that destination grid, it
+    # rejects before allocation ("Requested"), closing the bypass where a small
+    # exterior would smuggle an enormous reprojected read past the guard.
+    coords = (
+        "POLYGON((0 0, 1000 0, 1000 1000, 0 1000, 0 0), "
+        "(-500000 -1e12, 500000 -1e12, 500000 1e12, -500000 1e12, -500000 -1e12))"
+    )
+    response = client.get(
+        "/area", params={"url": cog_path, "coords": coords, "crs": "EPSG:3857"}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+
 def test_area_rejects_oversized_polygon(
     small_ceiling_client: TestClient, cog_path: str
 ) -> None:
@@ -1302,6 +1337,24 @@ def test_area_rejects_oversized_polygon(
         "/area", params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON}
     )
     assert response.status_code == 400, response.text
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_hole_beyond_exterior_bounded_before_read(
+    small_ceiling_client: TestClient, cog_path: str
+) -> None:
+    # rio-tiler's feature() bounds ALL rings, so a permissively-accepted interior
+    # ring (hole) reaching past a tiny exterior sizes the read to the hole, not
+    # the exterior. The pre-read ceiling must measure that same all-rings extent
+    # and reject before allocation ("Requested"): an exterior-only measure passes
+    # the tiny exterior and lets feature() allocate the full read first, tripping
+    # only the post-read "Output" backstop (the DoS the pre-read guard closes).
+    coords = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0), (-10 -5, 10 -5, 10 5, -10 5, -10 -5))"
+    response = small_ceiling_client.get(
+        "/area", params={"url": cog_path, "coords": coords}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
 
 

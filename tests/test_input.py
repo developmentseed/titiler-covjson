@@ -650,12 +650,25 @@ class TestPolygon:
 
         assert poly.bounds == (1.0, 2.0, 7.0, 3.0)
 
-    def test_bounds_from_exterior_ring_only(self) -> None:
-        """The bounding box comes from the exterior ring, not interior holes."""
+    def test_bounds_contained_hole_does_not_extend(self) -> None:
+        """A hole inside the exterior leaves the bounding box unchanged."""
         exterior = ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0))
         hole = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0))
 
         assert Polygon(rings=(exterior, hole)).bounds == (0.0, 0.0, 4.0, 4.0)
+
+    def test_bounds_spans_all_rings(self) -> None:
+        """bounds spans every ring, so a hole reaching past the exterior widens it.
+
+        A hole normally sits inside the exterior, but construction is permissive
+        and does not enforce containment. The read a polygon drives (rio-tiler's
+        feature) bounds all rings, so bounds must too: an interior ring extending
+        beyond the exterior widens the box rather than hiding behind it.
+        """
+        exterior = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0))
+        beyond = ((-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0), (-5.0, -5.0))
+
+        assert Polygon(rings=(exterior, beyond)).bounds == (-5.0, -5.0, 5.0, 5.0)
 
     def test_frozen(self) -> None:
         """Polygon is immutable."""

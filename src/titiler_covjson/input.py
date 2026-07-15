@@ -177,19 +177,24 @@ class Polygon:
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
-        """The ``(minx, miny, maxx, maxy)`` bounding box of the exterior ring.
+        """The ``(minx, miny, maxx, maxy)`` bounding box spanning every ring.
 
-        The exterior ring (``rings[0]``) encloses any interior holes, so it alone
-        determines the extent. A degenerate polygon (a point or an axis-aligned
-        line) has ``minx == maxx`` or ``miny == maxy``.
+        Spans all rings, not just the exterior. Construction is permissive and
+        does not enforce that holes lie inside the exterior, and the read a
+        polygon drives (rio-tiler's ``feature``) bounds every ring, so an interior
+        ring reaching past the exterior must widen this box too; otherwise it
+        could slip a large read past a cell-count ceiling checked here. For a
+        well-formed polygon, whose holes lie inside the exterior, this equals the
+        exterior's box. A degenerate polygon (a point or an axis-aligned line) has
+        ``minx == maxx`` or ``miny == maxy``.
 
         Returns:
             tuple[float, float, float, float]: The bounding box, in the holder's
                 CRS.
         """
-        exterior = self.rings[0]
-        xs = [x for x, _ in exterior]
-        ys = [y for _, y in exterior]
+        vertices = [vertex for ring in self.rings for vertex in ring]
+        xs = [x for x, _ in vertices]
+        ys = [y for _, y in vertices]
 
         return min(xs), min(ys), max(xs), max(ys)
 
