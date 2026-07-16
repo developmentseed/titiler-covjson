@@ -166,7 +166,7 @@ documents predate the implementation and carry a superseded note where relevant.
   [API definition](docs/02-api-definition.md),
   [data model reference](docs/03-data-model-reference.md),
   [modeler/converter design](docs/04-modeler-converter-design.md),
-  [implementation roadmap](docs/05-implementation-roadmap.md),
+  [implementation roadmap](docs/05-implementation-roadmap.md) (retired),
   [libraries analysis](docs/06-existing-libraries-analysis.md),
   [API design alternatives](docs/07-api-design-alternatives.md)
 
