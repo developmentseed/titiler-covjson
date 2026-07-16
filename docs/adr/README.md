@@ -54,3 +54,5 @@ Keep each ADR self-contained, and do not restate conventions already in CLAUDE.m
 - [ADR-0003](0003-dataset-open-read-error-status.md) -- Dataset open/read
   failures return HTTP 500 by default (deployment-overridable; no in-library
   404/500 split)
+- [ADR-0004](0004-non-temporal-surface-edr-query-verbs.md) -- The non-temporal
+  CoverageJSON surface is the EDR non-temporal query verbs; drop XYZ `/tiles`

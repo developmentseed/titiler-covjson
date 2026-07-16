@@ -1,11 +1,11 @@
 """CoverageInput: the intermediate representation between TiTiler and CovJSON.
 
-Every endpoint in this package (tile, bbox, point, transect, time series)
-reads data through rio-tiler, but each read produces a different kind of
-result (``ImageData``, ``PointData``, values assembled across many STAC
-items), and none of those objects carries everything a CoverageJSON document
-needs: band descriptions and units, timestamps, source geometry, or
-collection/item provenance. This module defines the per-domain input variants
+Every endpoint in this package reads data through rio-tiler, but each read
+produces a different kind of result (``ImageData``, ``PointData``, values
+assembled across many STAC items), and none of those objects carries
+everything a CoverageJSON document needs: band descriptions and units,
+timestamps, source geometry, or collection/item provenance. This module
+defines the per-domain input variants
 that carry it: a shared base plus one frozen dataclass per domain
 (:class:`GridInput` and :class:`PointInput` now; a PointSeries variant follows),
 grouped under the :data:`CoverageInput` alias that endpoint code fills from
@@ -516,8 +516,8 @@ def imagedata_to_coverage_input(
 ) -> GridInput:
     """Convert a rio-tiler ``ImageData`` to a :class:`GridInput`.
 
-    This is the converter used by raster (grid) endpoints: tile, bbox, and
-    overview reads all yield an ``ImageData``. The image's masked array is
+    This is the converter for raster (grid) reads: a ``Reader.part``
+    bounding-box read yields an ``ImageData``. The image's masked array is
     passed through unchanged: rio-tiler stores ``ImageData.array`` as a 3-D
     ``(bands, height, width)`` masked array with nodata already encoded in
     the mask, so no further nodata handling is required here.
@@ -530,7 +530,7 @@ def imagedata_to_coverage_input(
     ``bands=band_info_from_reader_info(reader.info())``.
 
     Args:
-        img: Source image, e.g., from ``Reader.tile()`` or ``Reader.part()``.
+        img: Source image, e.g., from ``Reader.part()``.
         bands: Complete per-band metadata. Mutually exclusive with
             ``band_names``, ``band_descriptions``, and ``band_units``.
         band_names: Per-band names overriding ``img.band_names``.

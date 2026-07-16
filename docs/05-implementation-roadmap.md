@@ -8,7 +8,10 @@
 > Data Retrieval (EDR) aligned `/bbox` -> Grid slice specified in
 > [doc 08](08-bbox-endpoint-spec.md) (replacing Story 5's `/covjson/bbox` with
 > `format=aggregated`), `/cube` deferred, and `max_size` downsampling subsuming
-> Story 10's `/overview`. The roadmap will be re-planned to that direction; it
+> Story 10's `/overview`. Story 7 (`/covjson/tiles`) is **dropped** entirely per
+> [ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md): XYZ tiling is not
+> an EDR verb, and its use cases are covered by the `/bbox` extraction slice and by
+> `TiledNdArray` (Story 12). The roadmap will be re-planned to that direction; it
 > is retained here for reference.
 
 ## EPIC: CoverageJSON Output Format for TiTiler
@@ -158,6 +161,13 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 ### Story 7: CovJSON Tile Endpoint
 
+> **Dropped.** Per
+> [ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md), the XYZ `/tiles`
+> endpoint is not built: it is not an EDR query verb (XYZ tiling is OGC API -
+> Tiles, a separate standard), a tile is a bounding box already served by `/bbox`,
+> and tiled delivery of large coverages is the job of `TiledNdArray` (Story 12).
+> The original story is retained below for reference.
+
 **Priority**: P1
 
 **Description**: Implement the `/covjson/tiles/{z}/{x}/{y}` endpoint serving tiles as CovJSON.
@@ -263,7 +273,7 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 
 - [ ] Implement TileSet URL template generation
 - [ ] When bbox coverage exceeds a threshold (e.g., > 1024x1024), use TiledNdArray instead of NdArray
-- [ ] URL template points to CovJSON tile endpoint: `/covjson/tiles/{z}/{x}/{y}?url=...`
+- [ ] URL template points to a coverage tileset resource (not the XYZ `/covjson/tiles` endpoint, which was dropped: see [ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md)). A per-tile backing store can be defined as part of this story if one is needed
 - [ ] Client can progressively fetch tiles
 - [ ] Write tests
 
@@ -300,7 +310,6 @@ Story 2 (CoverageInput)             ──┘                         │
                                                                   ├──> Story 4 (Point)
                                                                   ├──> Story 5 (Bbox)
                                                                   ├──> Story 6 (Transect)
-                                                                  ├──> Story 7 (Tile)
                                                                   ├──> Story 8 (Info)
                                                                   ├──> Story 9 (TimeSeries)
                                                                   ├──> Story 10 (Overview)
@@ -318,7 +327,7 @@ Story 2 (CoverageInput)             ──┘                         │
 | Sprint | Stories | Focus |
 | -------- | --------- | ------- |
 | Sprint 1 | 1, 2, 3 | Foundation: models, input, modeler |
-| Sprint 2 | 4, 5, 7, 11 | Core endpoints: point, bbox, tile + router |
+| Sprint 2 | 4, 5, 11 | Core endpoints: point, bbox + router |
 | Sprint 3 | 6, 8, 10 | Extended endpoints: transect, info, overview |
 | Sprint 4 | 9, 12, 13 | Advanced: time series, tiled ranges, docs |
 

@@ -332,7 +332,7 @@ def transect_to_coverage_input(url: str, line: LineString, resolution: float, ..
 
 | Input | Domain Type | Axes | Range Shape | Notes |
 | --- | --- | --- | --- | --- |
-| Raster tile/bbox | Grid | x(start,stop,num), y(start,stop,num) | [height, width] | Most common case |
+| Raster bbox | Grid | x(start,stop,num), y(start,stop,num) | [height, width] | Most common case |
 | Point value | Point | x(values), y(values) | [1] | Single pixel lookup |
 | Point + timestamps | PointSeries | x, y, t(values) | [n_times] | Time series at a location |
 | Bbox aggregated | PolygonSeries | composite(polygon) | [1] | Mean/median over area |
