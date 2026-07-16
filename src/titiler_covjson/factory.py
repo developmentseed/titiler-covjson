@@ -57,14 +57,13 @@ from titiler_covjson.dependencies import (
     to_kwargs,
     validate_covjson_format,
 )
+from titiler_covjson.geometry import Polygon, Position
 from titiler_covjson.helpers import crs_to_ogc_uri
 from titiler_covjson.input import (
     BandInfo,
     GridInput,
     PointInput,
-    Polygon,
     PolygonInput,
-    Position,
     band_info_from_reader_info,
     imagedata_to_grid_input,
     imagedata_to_polygon_input,

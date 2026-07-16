@@ -17,7 +17,7 @@ from titiler_covjson.factory import (
     _resolve_grid_dimensions,
     _resolve_read_bands,
 )
-from titiler_covjson.input import Polygon, Position
+from titiler_covjson.geometry import Polygon, Position
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
 
 
