@@ -265,6 +265,14 @@ dataset read failure (`500`), not a not-found resource. The `crs` value is
 validated by a Pydantic `BeforeValidator`, so an invalid one is a `422`, not a
 `400`.
 
+The `500` for a dataset open or read failure is the library's deliberate
+default, not a `404` or `400`: the failure cannot be reliably attributed to
+the client, and distinguishing "not found" from "forbidden" would leak the
+existence of resources the server can reach but the caller cannot. A
+deployment whose trust model makes that leak moot can remap the failure to a
+`4xx`; see [ADR-0003](adr/0003-dataset-open-read-error-status.md) for the
+rationale and the [README](../README.md) for the override recipe.
+
 The documented error bodies assume the host application installs TiTiler's
 exception handlers (`add_exception_handlers`), which render reader and dataset
 errors as a JSON `detail` response; without them, such errors surface as an

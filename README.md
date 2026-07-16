@@ -57,6 +57,31 @@ comma-delimited path segment, interpreted in CRS84 by default):
 curl "http://localhost:8000/bbox/-10,-5,10,5?url=/path/to/cog.tif"
 ```
 
+## Overriding the dataset error status
+
+A failure to open or read the dataset `url` (a missing or unreadable file, an
+unreachable or forbidden remote) surfaces as HTTP `500` by default. That is the
+conservative choice for an untrusted, multi-tenant deployment: it never blames
+the caller for a server-side outage, and it never reveals whether an internal
+path the server can reach (but the caller cannot) exists. See
+[ADR-0003](docs/adr/0003-dataset-open-read-error-status.md) for the full
+rationale.
+
+A single-tenant or otherwise trusted deployment (where the caller's access
+scope matches the server's, so that existence leak is moot) can remap the
+failure to a client error by extending TiTiler's status-code map:
+
+```python
+from rasterio.errors import RasterioIOError
+from starlette import status
+from titiler.core.errors import DEFAULT_STATUS_CODES, add_exception_handlers
+
+add_exception_handlers(
+    app,
+    {**DEFAULT_STATUS_CODES, RasterioIOError: status.HTTP_400_BAD_REQUEST},
+)
+```
+
 ## Run it with Docker
 
 A small demo container serves the `/bbox` endpoint against a bundled sample
