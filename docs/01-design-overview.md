@@ -7,7 +7,12 @@
 > overview) are superseded: see ADR-0001 for the current direction (an OGC API -
 > Environmental Data Retrieval (EDR) aligned vocabulary on a dedicated
 > `BaseFactory` subclass) and [doc 08](08-bbox-endpoint-spec.md) for the first
-> endpoint specified under it.
+> endpoint specified under it. Section 3's tile query is dropped
+> ([ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md)) and its
+> transect is reclassified as the temporal `/trajectory`
+> ([ADR-0005](adr/0005-trajectory-temporal-multipoint-non-temporal.md)); the
+> [ADRs](adr/) record the current direction and the README tracks what has
+> shipped.
 
 ## 1. Context & Motivation
 
@@ -34,7 +39,7 @@
 2. **API Definition** - Endpoint specifications
 3. **Data Model Reference** - CovJSON models via covjson-pydantic
 4. **Modeler/Converter Design** - How raster data maps to CovJSON
-5. **Implementation Roadmap** - EPIC breakdown with stories
+5. **Implementation Roadmap** (retired) - EPIC breakdown with stories
 6. **Existing Libraries Analysis** - covjson-pydantic and covjson-validator assessment
 
 ---
