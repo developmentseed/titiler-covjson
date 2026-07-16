@@ -300,7 +300,6 @@ for the Grid domain.
   ADR-0001.
 - [doc 02](02-api-definition.md) is the earlier bespoke API definition;
   ADR-0001 supersedes its direction, and this document supersedes its `/bbox`
-  treatment. doc 02's remaining endpoints (point, transect, time series, info)
-  have not yet been redesigned under the ADR-0001 direction, and its `tiles`
-  endpoint is dropped (see
-  [ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md)).
+  treatment. See its header banner for where its remaining endpoints now stand.
+- [ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md) drops the XYZ
+  `tiles` endpoint, whose extraction use cases this spec's `/bbox` covers.
