@@ -250,7 +250,13 @@ class CovJSONFactory(BaseFactory):
             description=(
                 "Reduce the dataset over the polygon `coords` (a WKT "
                 "`POLYGON((x y, ...))`) to a single value per band by `stat` "
-                "(default `mean`) and return a CoverageJSON Polygon coverage. By "
+                "(default `mean`) and return a CoverageJSON Polygon coverage. The "
+                "reduction is an unweighted, all-touched pixel statistic: every "
+                "pixel the polygon boundary touches is included whole, at equal "
+                "weight, and none is weighted by the fraction of it the polygon "
+                "actually covers. Expect results to diverge from an area-weighted "
+                "zonal statistic where boundary pixels are a large share of the "
+                "polygon, i.e., for polygons only a few pixels across. By "
                 "default the polygon is interpreted in, and the output labeled "
                 "with, CRS84 (longitude/latitude); pass `crs` to override. A "
                 "polygon that selects no valid pixels (outside the dataset, or "
@@ -535,6 +541,14 @@ def _read_polygon_image(
             grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
         )
 
+        # feature() rasterizes the cutline with all_touched=True, hardcoded rather
+        # than exposed as a parameter, so every pixel the polygon boundary touches
+        # is masked in whole and the downstream reduction weights each equally.
+        # Area weighting would not require shapely, should we want it later:
+        # ImageData.get_coverage_array() returns a geometry's fractional per-cell
+        # coverage (rasterize at a subpixel scale, then aggregate), and
+        # ImageData.statistics() takes that array as its `coverage` argument. Both
+        # ship with rio-tiler and rest on rasterio.features, already a dependency.
         image = src_dst.feature(
             geometry,
             shape_crs=read_crs,

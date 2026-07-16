@@ -24,13 +24,16 @@ dataset, each returning a CoverageJSON coverage in its own domain.
     single location.
   - `GET {prefix}/area?coords=POLYGON((...))`: a Polygon coverage reducing the
     dataset over a polygon to one value per band by a `stat` (default `mean`).
+    The reduction is an unweighted, all-touched pixel statistic: a pixel the
+    polygon boundary merely grazes counts the same as one wholly inside, and
+    `std` is the population standard deviation. Expect results to diverge from
+    an area-weighted zonal statistic for polygons only a few pixels across.
 
   All three support band selection (`bidx` / `expression` / the OGC API -
   Environmental Data Retrieval (EDR) `parameter-name` alias) and a single `crs`
   knob.
-- **Planned:** transect (trajectory) and tiled queries, temporal (time series)
-  extraction, further coverage domains, and multi-dataset / SpatioTemporal Asset
-  Catalog (STAC) sources.
+- **Planned:** transect (trajectory), temporal (time series) extraction, further
+  coverage domains, and multi-dataset / STAC sources.
 
 ## Installation
 

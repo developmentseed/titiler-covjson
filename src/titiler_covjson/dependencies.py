@@ -276,7 +276,11 @@ def area_stat(
         Query(
             description=(
                 "Zonal reduction statistic over the polygon: one of min, max, "
-                "mean, median, std, sum, count. Defaults to mean."
+                "mean, median, std, sum, count. Defaults to mean. `std` is the "
+                "population standard deviation (normalized by N), not the sample "
+                "standard deviation (N-1): the polygon's pixels are taken to be "
+                "the whole population being described, not a sample drawn from a "
+                "larger one."
             ),
         ),
     ] = _DEFAULT_STAT,

@@ -140,7 +140,7 @@ class TestStat:
             (Stat.MAX, "max"),
             (Stat.MEAN, "mean"),
             (Stat.MEDIAN, "median"),
-            (Stat.STD, "std"),
+            (Stat.STD, "population standard deviation"),
             (Stat.SUM, "sum"),
             (Stat.COUNT, "valid pixel count"),
         ],
@@ -149,7 +149,9 @@ class TestStat:
     def test_label(self, stat: Stat, label: str) -> None:
         """Each stat has a human-readable label for a coverage parameter.
 
-        The wire value doubles as the label, except count ("valid pixel count").
+        The wire value doubles as the label, except where it is ambiguous on its
+        own: count ("valid pixel count") and std ("population standard
+        deviation", the convention it follows being unrecoverable from "std").
         """
         assert stat.label == label
 

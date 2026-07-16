@@ -21,11 +21,19 @@ class Stat(Enum):
 
     Each member's lowercase ``value`` is the wire form accepted from a request
     (e.g. ``Stat.MEAN.value == "mean"``), and it doubles as the human-readable
-    ``label`` in a coverage parameter (``"mean of <band>"``). The exception is
-    ``count``, whose bare value is an ambiguous label, so it reads ``"valid pixel
-    count"``. ``MIN``/``MAX``/``SUM`` keep the source integer or float kind;
+    ``label`` in a coverage parameter (``"mean of <band>"``). The exceptions are
+    ``count`` and ``std``, whose bare values are ambiguous labels, so they read
+    ``"valid pixel count"`` and ``"population standard deviation"``.
+    ``MIN``/``MAX``/``SUM`` keep the source integer or float kind;
     ``MEAN``/``MEDIAN``/``STD`` promote to float; ``COUNT`` is an integer,
     dimensionless count of valid pixels (the one reduction that drops the unit).
+
+    ``STD`` is deliberately the population standard deviation (normalized by
+    ``N``) rather than the sample standard deviation (normalized by ``N - 1``):
+    the pixels reduced are the whole population being described, not a sample
+    drawn from a larger one. Note that this is numpy's default but not that of
+    every statistical tool, so a cross-check against one that samples by default
+    will differ, the more so the fewer pixels are reduced.
     """
 
     MIN = "min"
@@ -41,13 +49,36 @@ class Stat(Enum):
         """A human-readable phrase naming the reduction, for a coverage parameter.
 
         The wire ``value`` doubles as the label for every reduction whose name
-        reads well (``"mean"``, ``"sum"``, ...); ``count`` is the exception, since
-        a bare ``"count"`` is ambiguous.
+        reads well (``"mean"``, ``"sum"``, ...). Two are ambiguous on their own
+        and spell themselves out instead: a bare ``"count"`` does not say what is
+        counted, and a bare ``"std"`` does not say which convention it follows,
+        when the population and sample standard deviations are different numbers.
+        The label is the reduction's only description that travels with the
+        coverage, so it carries what a reader of the response would otherwise
+        have to guess.
 
         Returns:
             str: The reduction's human-readable name.
+
+        Examples:
+            >>> Stat.MEAN.label
+            'mean'
+            >>> Stat.COUNT.label
+            'valid pixel count'
+            >>> Stat.STD.label
+            'population standard deviation'
         """
-        return "valid pixel count" if self is Stat.COUNT else self.value
+        if self is Stat.COUNT:
+            return "valid pixel count"
+
+        if self is Stat.STD:
+            return "population standard deviation"
+
+        # Enum.value is typed Any, so bind through an annotated local to keep the
+        # declared return type.
+        wire: str = self.value
+
+        return wire
 
     @property
     def preserves_unit(self) -> bool:
