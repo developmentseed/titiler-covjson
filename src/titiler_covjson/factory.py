@@ -71,7 +71,7 @@ from titiler_covjson.input import (
 from titiler_covjson.modeler import to_coverage
 from titiler_covjson.reduce import Stat
 from titiler_covjson.responses import CovJSONResponse
-from titiler_covjson.wkt import parse_point_wkt, parse_polygon_wkt
+from titiler_covjson.wkt import InvalidCoords, parse_point_wkt, parse_polygon_wkt
 
 DEFAULT_MAX_SIZE = 1024
 
@@ -203,6 +203,10 @@ class CovJSONFactory(BaseFactory):
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
             position = parse_point_wkt(coords)
+
+            if isinstance(position, InvalidCoords):
+                raise BadRequestError(position.message)
+
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)
             band_kwargs = to_kwargs(band_params)
@@ -259,6 +263,10 @@ class CovJSONFactory(BaseFactory):
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
             polygon = parse_polygon_wkt(coords)
+
+            if isinstance(polygon, InvalidCoords):
+                raise BadRequestError(polygon.message)
+
             _reject_degenerate_polygon(polygon)
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)

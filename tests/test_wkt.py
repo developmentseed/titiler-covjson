@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from titiler.core.errors import BadRequestError
 
 from titiler_covjson.geometry import Polygon, Position
-from titiler_covjson.wkt import parse_point_wkt, parse_polygon_wkt
+from titiler_covjson.wkt import InvalidCoords, parse_point_wkt, parse_polygon_wkt
 
 
 @pytest.mark.parametrize(
@@ -21,7 +20,7 @@ from titiler_covjson.wkt import parse_point_wkt, parse_polygon_wkt
     ],
     ids=["canonical", "decimals", "lowercase", "whitespace", "exponent", "signs"],
 )
-def testparse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None:
+def test_parse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None:
     assert parse_point_wkt(wkt) == expected
 
 
@@ -37,10 +36,12 @@ def testparse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None:
     ],
     ids=["Z-tag", "M-tag", "ZM-tag", "Z-suffix", "3-token", "4-token"],
 )
-def testparse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
+def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
     # A vertical/measured geometry is rejected: the 2-D raster cannot sample it.
-    with pytest.raises(BadRequestError, match="not supported"):
-        parse_point_wkt(wkt)
+    parsed = parse_point_wkt(wkt)
+
+    assert isinstance(parsed, InvalidCoords)
+    assert "not supported" in parsed.message
 
 
 @pytest.mark.parametrize(
@@ -72,9 +73,11 @@ def testparse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "overflow",
     ],
 )
-def testparse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
-    with pytest.raises(BadRequestError, match="Invalid position"):
-        parse_point_wkt(wkt)
+def test_parse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
+    parsed = parse_point_wkt(wkt)
+
+    assert isinstance(parsed, InvalidCoords)
+    assert "Invalid position" in parsed.message
 
 
 @pytest.mark.parametrize(
@@ -99,17 +102,18 @@ def testparse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
     ],
     ids=["canonical", "lowercase-no-space", "whitespace", "decimals-exp-signs"],
 )
-def testparse_polygon_wkt_accepts_single_ring(
+def test_parse_polygon_wkt_accepts_single_ring(
     wkt: str, expected: tuple[tuple[tuple[float, float], ...], ...]
 ) -> None:
     assert parse_polygon_wkt(wkt) == Polygon(rings=expected)
 
 
-def testparse_polygon_wkt_accepts_holes() -> None:
+def test_parse_polygon_wkt_accepts_holes() -> None:
     # An exterior ring plus one interior ring (hole) yields two rings.
     wkt = "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))"
     polygon = parse_polygon_wkt(wkt)
 
+    assert isinstance(polygon, Polygon)
     assert len(polygon.rings) == 2
     assert polygon.rings[1] == (
         (1.0, 1.0),
@@ -130,10 +134,12 @@ def testparse_polygon_wkt_accepts_holes() -> None:
     ],
     ids=["Z-tag", "M-tag", "ZM-tag", "3-token-vertex"],
 )
-def testparse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
+def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
     # A 3-D/measured polygon is rejected: the 2-D raster cannot sample a level.
-    with pytest.raises(BadRequestError, match="not supported"):
-        parse_polygon_wkt(wkt)
+    parsed = parse_polygon_wkt(wkt)
+
+    assert isinstance(parsed, InvalidCoords)
+    assert "not supported" in parsed.message
 
 
 @pytest.mark.parametrize(
@@ -165,6 +171,8 @@ def testparse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "non-numeric",
     ],
 )
-def testparse_polygon_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
-    with pytest.raises(BadRequestError, match="Invalid polygon"):
-        parse_polygon_wkt(wkt)
+def test_parse_polygon_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
+    parsed = parse_polygon_wkt(wkt)
+
+    assert isinstance(parsed, InvalidCoords)
+    assert "Invalid polygon" in parsed.message

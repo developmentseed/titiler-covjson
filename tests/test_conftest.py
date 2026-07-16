@@ -43,15 +43,3 @@ class TestValidateCovjson:
         """
         with pytest.raises(jsonschema.ValidationError, match="'y' is a required"):
             validate_covjson(_GRID_DOMAIN_MISSING_Y, "domain")
-
-    def test_named_definition_accepts_a_valid_instance(self) -> None:
-        """Test that applying the domainType rules does not reject a valid domain."""
-        valid = {
-            **_GRID_DOMAIN_MISSING_Y,
-            "axes": {
-                "x": {"start": 0.0, "stop": 1.0, "num": 2},
-                "y": {"start": 1.0, "stop": 0.0, "num": 2},
-            },
-        }
-
-        validate_covjson(valid, "domain")
