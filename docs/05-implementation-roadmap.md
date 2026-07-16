@@ -1,5 +1,10 @@
 # Implementation Roadmap (EPIC)
 
+> **Retired.** The live plan is the Architecture Decision Records in
+> [docs/adr/](adr/) and the GitHub milestones, not this file. The original
+> stories below are kept unchanged as the historical record; "Where the stories
+> landed" (just below) maps each to where it now sits.
+>
 > **Superseded in direction.** This roadmap predates
 > [ADR-0001](adr/0001-covjson-http-api-direction.md). The model-layer stories
 > (1-3) remain accurate, but the endpoint and integration stories below are
@@ -11,8 +16,11 @@
 > Story 10's `/overview`. Story 7 (`/covjson/tiles`) is **dropped** entirely per
 > [ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md): XYZ tiling is not
 > an EDR verb, and its use cases are covered by the `/bbox` extraction slice and by
-> `TiledNdArray` (Story 12). The roadmap will be re-planned to that direction; it
-> is retained here for reference.
+> `TiledNdArray` (Story 12). Story 6 (transect) is reclassified as temporal per
+> [ADR-0005](adr/0005-trajectory-temporal-multipoint-non-temporal.md): the
+> CoverageJSON Trajectory domain requires a `t` coordinate, so `/trajectory`
+> is a temporal verb, and the non-temporal multi-position capability is
+> MultiPoint via `/position` with a `MULTIPOINT` geometry.
 
 ## EPIC: CoverageJSON Output Format for TiTiler
 
@@ -28,6 +36,32 @@ Add CoverageJSON (CovJSON) as a new output format to TiTiler via the `titiler-co
 - Integration with existing TiTiler readers (COG, STAC, MosaicJSON) works
 - Unit tests cover all domain types (Grid, Point, PointSeries, Polygon, Trajectory)
 - Performance is acceptable for typical raster sizes (< 2s for a 256x256 tile)
+
+## Where the stories landed
+
+Added during the roadmap-realignment reconciliation. The original stories are
+kept verbatim below; this table records where each now lives (the live plan is
+the milestones and the ADRs).
+
+| Story | Original intent | Current home |
+| --- | --- | --- |
+| 1 | CovJSON model layer (helpers) | Done |
+| 2 | CoverageInput intermediate representation | Done |
+| 3 | Modeler (all domains) | Grid/Point/Polygon done; MultiPoint = #65 (`/position` MULTIPOINT slice); Trajectory folded into #57 (now temporal, ADR-0005); CoverageCollection #24 |
+| 4 | Point query endpoint | `/position` (#44); the `MULTIPOINT` extension is #65 (MultiPoint slice) |
+| 5 | Bbox query endpoint | `/bbox` (#32/#33/#34); stands in for the EDR `cube` verb (ADR-0001) |
+| 6 | Transect / line profile | `/trajectory` (#57); moved to the Temporal surface (ADR-0005) |
+| 7 | Tile endpoint | Dropped (ADR-0004); #58 closes via its docs PR |
+| 8 | Coverage info / metadata | `/info` (#59, deferred) |
+| 9 | Time series (STAC collection) | Temporal surface: PointSeries (#18), the temporal-surface umbrella (#68), and the STAC/Mosaic resolver-seam issue (#69) supplying a real `t` |
+| 10 | Overview / downsampled grid | Subsumed by `/bbox` `width`/`height`/`max_size` (see [doc 08](08-bbox-endpoint-spec.md)) |
+| 11 | TiTiler router integration | Done as `CovJSONFactory(BaseFactory)` (ADR-0001); the release / PyPI publish pipeline is #67 |
+| 12 | TiledNdArray for large coverages | Deferred (#66); ADR-0004 names it as the tiled-delivery mechanism |
+| 13 | Documentation & validation | Schema validation done; docs site (#63); data-model doc reconciliation (#35) |
+
+Deferred EDR remainder (ADR-0004): `radius` (approximated by `/area` with a
+circular polygon) and `corridor` (a buffered trajectory, depends on
+`/trajectory`).
 
 ## Stories
 
