@@ -24,7 +24,6 @@ right status codes.
 
 import dataclasses
 import math
-import re
 from collections.abc import Callable
 from typing import Annotated, Any
 
@@ -72,6 +71,7 @@ from titiler_covjson.input import (
 from titiler_covjson.modeler import to_coverage
 from titiler_covjson.reduce import Stat
 from titiler_covjson.responses import CovJSONResponse
+from titiler_covjson.wkt import parse_point_wkt, parse_polygon_wkt
 
 DEFAULT_MAX_SIZE = 1024
 
@@ -79,25 +79,6 @@ DEFAULT_MAX_SIZE = 1024
 # for geographic output). It is distinct from EPSG:4326 (latitude/longitude
 # authority order) even though both denote the same positions.
 CRS84 = rasterio.CRS.from_string("OGC:CRS84")
-
-# WKT for a point: `POINT`, an optional Z/M/ZM tag, then whitespace-separated
-# coordinates in parentheses. _parse_point_wkt inspects the tag and coordinate
-# count to reject 3-D/measured geometries; the comma (the MULTIPOINT coordinate
-# separator) is deliberately not allowed inside a single point.
-_POINT_WKT = re.compile(
-    r"^\s*POINT\s*(?P<tag>Z|M|ZM)?\s*\(\s*(?P<coords>[^()]*?)\s*\)\s*$",
-    re.IGNORECASE,
-)
-
-# WKT for a polygon: `POLYGON`, an optional Z/M/ZM tag, then the parenthesized
-# ring list `((x y, ...), (x y, ...))`. _parse_polygon_wkt inspects the tag and
-# splits the ring list with _POLYGON_RING (each parenthesized group is one ring);
-# MULTIPOLYGON fails this pattern (the leading `MULTI`), keeping a single polygon.
-_POLYGON_WKT = re.compile(
-    r"^\s*POLYGON\s*(?P<tag>Z|M|ZM)?\s*\((?P<rings>.*)\)\s*$",
-    re.IGNORECASE | re.DOTALL,
-)
-_POLYGON_RING = re.compile(r"\(([^()]*)\)")
 
 
 @define(kw_only=True)
@@ -221,7 +202,7 @@ class CovJSONFactory(BaseFactory):
             _vertical: Annotated[None, Depends(reject_vertical_selection)],
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
-            position = _parse_point_wkt(coords)
+            position = parse_point_wkt(coords)
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)
             band_kwargs = to_kwargs(band_params)
@@ -277,7 +258,7 @@ class CovJSONFactory(BaseFactory):
             _vertical: Annotated[None, Depends(reject_vertical_selection)],
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
-            polygon = _parse_polygon_wkt(coords)
+            polygon = parse_polygon_wkt(coords)
             _reject_degenerate_polygon(polygon)
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)
@@ -588,211 +569,6 @@ def _validate_bbox(minx: float, miny: float, maxx: float, maxy: float) -> None:
         raise BadRequestError(msg)
 
 
-def _parse_point_wkt(coords: str) -> Position:
-    """Parse a 2-D WKT ``POINT(x y)`` into a :class:`Position`.
-
-    A hand-rolled parser, deliberately dependency-free: a two-float point does
-    not justify a GEOS-backed geometry library, and confining WKT handling here
-    keeps the model layer geometry-free (only the parser body would change if a
-    future geometry endpoint made such a dependency load-bearing). Accepts a
-    plain 2-D ``POINT(x y)`` with whitespace-separated coordinates; everything
-    else is rejected with ``BadRequestError``:
-
-    - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or three or four
-      coordinates): the 2-D raster backing cannot sample a vertical level, so
-      echoing or dropping it would be dishonest (see
-      docs/adr/0001-covjson-http-api-direction.md);
-    - a non-POINT geometry, ``POINT EMPTY``, the wrong coordinate count, a
-      comma-separated ``POINT(1, 2)`` (the comma is the ``MULTIPOINT`` separator,
-      not an intra-point one), or any other malformed input;
-    - a non-finite coordinate (NaN or infinity), which would otherwise serialize
-      to a silent ``null`` domain axis.
-
-    Args:
-        coords: The raw ``coords`` query value.
-
-    Returns:
-        Position: The parsed 2-D position.
-
-    Raises:
-        BadRequestError: If ``coords`` is not a finite 2-D WKT point. The host
-            application's titiler exception handlers render this as a 400
-            response.
-
-    Examples:
-        >>> _parse_point_wkt("POINT(0 0)")
-        Position(x=0.0, y=0.0, z=None)
-        >>> _parse_point_wkt("  point ( -5.0   2.5 ) ")
-        Position(x=-5.0, y=2.5, z=None)
-
-        A 3-D point is rejected (vertical selection is unsupported here):
-
-        >>> _parse_point_wkt("POINT Z (0 0 5)")
-        Traceback (most recent call last):
-            ...
-        titiler.core.errors.BadRequestError: Vertical or measured coordinates ...
-
-        A malformed point is rejected:
-
-        >>> _parse_point_wkt("POINT(0)")
-        Traceback (most recent call last):
-            ...
-        titiler.core.errors.BadRequestError: Invalid position 'POINT(0)': ...
-    """
-    if (match := _POINT_WKT.match(coords)) is None:
-        msg = f"Invalid position {coords!r}: expected WKT POINT(x y), e.g., POINT(0 0)."
-        raise BadRequestError(msg)
-
-    tokens = match["coords"].split()
-
-    if match["tag"] or len(tokens) in (3, 4):
-        msg = (
-            "Vertical or measured coordinates are not supported: this endpoint "
-            f"samples a single 2-D raster. Provide a 2-D POINT(x y); got {coords!r}."
-        )
-        raise BadRequestError(msg)
-
-    if len(tokens) != 2:
-        msg = (
-            f"Invalid position {coords!r}: expected two coordinates, e.g., POINT(0 0)."
-        )
-        raise BadRequestError(msg)
-
-    # float() rejects non-numeric tokens and Position rejects non-finite ones
-    # (NaN/infinity), so one handler covers both: Position owns the finiteness
-    # invariant as the single source of truth (mirroring _validate_label_crs,
-    # which likewise turns a helper's ValueError into a BadRequestError).
-    try:
-        x, y = (float(token) for token in tokens)
-
-        return Position(x, y)
-    except ValueError:
-        msg = (
-            f"Invalid position {coords!r}: coordinates must be finite numbers "
-            "(not NaN or infinity), e.g., POINT(0 0)."
-        )
-        raise BadRequestError(msg) from None
-
-
-def _parse_polygon_wkt(coords: str) -> Polygon:
-    """Parse a 2-D WKT ``POLYGON((x y, ...), ...)`` into a :class:`Polygon`.
-
-    A hand-rolled parser, deliberately dependency-free like :func:`_parse_point_wkt`:
-    it splits the parenthesized ring list and reads each vertex as two floats,
-    handing the rings to :class:`Polygon`, which owns the ring invariants (closed,
-    at least four vertices, finite coordinates). Accepts a single 2-D ``POLYGON``
-    with one exterior ring and zero or more interior rings (holes); everything
-    else is rejected with ``BadRequestError``:
-
-    - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a vertex with
-      three or four coordinates): the 2-D raster backing has no vertical level to
-      reduce over, so echoing or dropping it would be dishonest (see
-      docs/adr/0001-covjson-http-api-direction.md);
-    - a non-POLYGON geometry (including ``MULTIPOLYGON``, whose ``MULTI`` prefix
-      fails the pattern), ``POLYGON EMPTY``, an empty ring, a non-finite or
-      non-numeric coordinate, an unclosed ring, a ring with fewer than four
-      vertices, or any other malformed input.
-
-    Args:
-        coords: The raw ``coords`` query value.
-
-    Returns:
-        Polygon: The parsed 2-D polygon.
-
-    Raises:
-        BadRequestError: If ``coords`` is not a valid 2-D WKT polygon. The host
-            application's titiler exception handlers render this as a 400
-            response.
-
-    Examples:
-        >>> _parse_polygon_wkt("POLYGON((0 0, 1 0, 1 1, 0 0))").rings
-        (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),)
-
-        A 3-D polygon is rejected (vertical selection is unsupported here):
-
-        >>> _parse_polygon_wkt("POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))")
-        Traceback (most recent call last):
-            ...
-        titiler.core.errors.BadRequestError: Vertical or measured coordinates ...
-
-        An unclosed ring is rejected:
-
-        >>> _parse_polygon_wkt("POLYGON((0 0, 1 0, 1 1, 0 1))")
-        Traceback (most recent call last):
-            ...
-        titiler.core.errors.BadRequestError: Invalid polygon 'POLYGON((0 0, ...
-    """
-    if (match := _POLYGON_WKT.match(coords)) is None:
-        msg = (
-            f"Invalid polygon {coords!r}: expected WKT POLYGON((x y, x y, ...)), "
-            "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
-        )
-        raise BadRequestError(msg)
-
-    if match["tag"]:
-        msg = (
-            "Vertical or measured coordinates are not supported: this endpoint "
-            f"reduces a single 2-D raster. Provide a 2-D POLYGON; got {coords!r}."
-        )
-        raise BadRequestError(msg)
-
-    if not (ring_strings := _POLYGON_RING.findall(match["rings"])):
-        msg = (
-            f"Invalid polygon {coords!r}: expected at least one parenthesized ring, "
-            "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
-        )
-        raise BadRequestError(msg)
-
-    # _parse_ring rejects a non-2-D or non-numeric vertex and Polygon rejects a
-    # non-finite, unclosed, or too-short ring; one handler turns every ValueError
-    # into a 400. Polygon owns the ring invariants as the single source of truth
-    # (mirroring _parse_point_wkt delegating finiteness to Position).
-    try:
-        return Polygon(rings=tuple(map(_parse_ring, ring_strings)))
-    except ValueError as exc:
-        msg = f"Invalid polygon {coords!r}: {exc}"
-        raise BadRequestError(msg) from exc
-
-
-def _parse_ring(ring: str) -> tuple[tuple[float, float], ...]:
-    """Parse a WKT ring body (``x y, x y, ...``) into a tuple of ``(x, y)`` vertices.
-
-    Args:
-        ring: A single ring's comma-separated ``x y`` vertices (the text inside
-            one ring's parentheses).
-
-    Returns:
-        tuple[tuple[float, float], ...]: The parsed vertices, in order.
-
-    Raises:
-        ValueError: If a vertex is not a 2-D ``x y`` pair (including a 3-D or
-            measured vertex), or a coordinate is not a number. The caller turns
-            this into a ``BadRequestError``.
-    """
-    vertices: list[tuple[float, float]] = []
-
-    for pair in ring.split(","):
-        tokens = pair.split()
-
-        if len(tokens) in {3, 4}:
-            msg = (
-                "vertical or measured coordinates are not supported: each vertex "
-                f"must be a 2-D 'x y' pair; got {pair.strip()!r}."
-            )
-            raise ValueError(msg)
-
-        if len(tokens) != 2:
-            msg = f"each ring vertex must be an 'x y' pair; got {pair.strip()!r}."
-            raise ValueError(msg)
-
-        # float() rejects a non-numeric token; a non-finite one (NaN/infinity)
-        # parses here and is rejected by Polygon, as in _parse_point_wkt.
-        x, y = (float(token) for token in tokens)
-        vertices.append((x, y))
-
-    return tuple(vertices)
-
-
 def _reject_degenerate_polygon(polygon: Polygon) -> None:
     """Reject a degenerate polygon (a point or an axis-aligned line) before I/O.
 
@@ -814,7 +590,7 @@ def _reject_degenerate_polygon(polygon: Polygon) -> None:
     Examples:
         A polygon collapsed to a point (or an axis-aligned line) is rejected:
 
-        >>> from titiler_covjson.input import Polygon
+        >>> from titiler_covjson.geometry import Polygon
         >>> _reject_degenerate_polygon(
         ...     Polygon(rings=(((5.0, 5.0), (5.0, 5.0), (5.0, 5.0), (5.0, 5.0)),))
         ... )
