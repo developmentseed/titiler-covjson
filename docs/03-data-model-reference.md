@@ -1,16 +1,13 @@
 # Data Model Reference
 
-> **Superseded in detail.** This is an early design reference. The concepts
-> (covjson-pydantic as the model layer, a set of project helpers) still hold,
-> but the helper names, signatures, and behavior sketched below have drifted
-> from the implementation. Treat the source modules as authoritative:
+> **Early design reference.** This document predates much of the
+> implementation and is kept for its conceptual overview: covjson-pydantic as
+> the model layer, supplemented by a set of project helpers. For exact
+> signatures and behavior, treat the source modules as authoritative:
 > [`helpers.py`](../src/titiler_covjson/helpers.py),
 > [`input.py`](../src/titiler_covjson/input.py), and
-> [`modeler.py`](../src/titiler_covjson/modeler.py). For example, the actual
-> functions are `crs_to_ogc_uri`, `create_spatial_2d_reference`,
-> `create_temporal_reference`, and `numpy_to_covjson_dtype`, and
-> `crs_to_ogc_uri` raises on an unrecognized authority rather than defaulting to
-> CRS84.
+> [`modeler.py`](../src/titiler_covjson/modeler.py), each of which carries full
+> docstrings and runnable doctests.
 
 ## 1. Overview
 
@@ -62,80 +59,47 @@ All CovJSON types are provided by `covjson-pydantic`:
 
 ## 4. Helper Utilities (titiler_covjson.helpers)
 
-These project-specific helpers wrap covjson-pydantic for common patterns:
+These project-specific helpers wrap covjson-pydantic for common patterns. The
+signatures and summaries below describe the public surface; the full docstrings
+and runnable doctests in `helpers.py` are authoritative.
 
 ### 4.1 Reference System Factories
 
-```python
-from covjson_pydantic.reference_system import (
-    ReferenceSystem, ReferenceSystemConnectionObject
-)
-
-def create_spatial_2d_ref(
-    crs_id: str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
-) -> ReferenceSystemConnectionObject:
-    return ReferenceSystemConnectionObject(
-        coordinates=["x", "y"],
-        system=ReferenceSystem(type="GeographicCRS", id=crs_id),
-    )
-
-def create_temporal_ref() -> ReferenceSystemConnectionObject:
-    return ReferenceSystemConnectionObject(
-        coordinates=["t"],
-        system=ReferenceSystem(type="TemporalRS", calendar="Gregorian"),
-    )
-
-def crs_to_ogc_uri(crs) -> str:
-    """Convert rasterio CRS to OGC CRS URI."""
-    if crs.to_epsg() == 4326:
-        return "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
-    epsg = crs.to_epsg()
-    if epsg:
-        return f"http://www.opengis.net/def/crs/EPSG/0/{epsg}"
-    return "http://www.opengis.net/def/crs/OGC/1.3/CRS84"
-```
+- `create_spatial_2d_reference(crs: rasterio.CRS)` returns a
+  `ReferenceSystemConnectionObject` for a 2-D spatial reference. Its
+  `coordinates` follow the CRS's declared axis order: a latitude/northing-first
+  CRS (e.g., `EPSG:4326`) yields `["y", "x"]`, while a longitude/easting-first
+  CRS (`CRS84`, projected CRSs) yields `["x", "y"]`. The system `type` is
+  `GeographicCRS` or `ProjectedCRS`, and its `id` comes from `crs_to_ogc_uri`.
+- `create_temporal_reference()` returns a `ReferenceSystemConnectionObject` for
+  an ISO 8601 `TemporalRS` on the Gregorian calendar.
+- `crs_to_ogc_uri(crs: rasterio.CRS)` maps a CRS to its OGC URI string via the
+  authority code: EPSG yields `http://www.opengis.net/def/crs/EPSG/0/{code}`
+  and OGC yields `http://www.opengis.net/def/crs/OGC/1.3/{code}`. It raises
+  `ValueError` on an unrecognized authority rather than defaulting to CRS84.
+  Because TiTiler's WGS84 default is the `EPSG:4326` CRS, that CRS emits the
+  `.../EPSG/0/4326` URI, not the distinct CRS84 URI.
 
 ### 4.2 Data Type Mapping
 
-```python
-import numpy as np
-
-DTYPE_MAP = {
-    np.float16: "float", np.float32: "float", np.float64: "float",
-    np.int8: "integer", np.int16: "integer", np.int32: "integer",
-    np.int64: "integer", np.uint8: "integer", np.uint16: "integer",
-    np.uint32: "integer", np.uint64: "integer",
-}
-
-def get_covjson_datatype(dtype: np.dtype) -> str:
-    return DTYPE_MAP.get(dtype.type, "float")
-```
+- `numpy_to_covjson_dtype(dtype)` returns the CoverageJSON data type string
+  (`"float"`, `"integer"`, or `"string"`), selected from the numpy dtype's kind,
+  and raises `ValueError` on an unsupported dtype.
+- `numpy_dtype_to_ndarray(data, dtype, axis_names)` converts a masked numpy
+  array for a single band into the matching NdArray range object
+  (`NdArrayFloat`, `NdArrayInt`, or `NdArrayStr`), choosing the subtype from the
+  declared band `dtype`. It accepts any rank (0-D scalar, 1-D profile, or 2-D
+  grid), takes `shape` from the array, and represents masked entries as missing
+  values (`NaN` for float, `null` for integer / string).
 
 ### 4.3 Unit Mapping (UCUM)
 
-```python
-from covjson_pydantic.unit import Unit, Symbol
-
-UNIT_MAP = {
-    "cm/a":  {"label": "cm/year",  "symbol": "cm/a"},
-    "cm":    {"label": "cm",       "symbol": "cm"},
-    "mm":    {"label": "mm",       "symbol": "mm"},
-    "mm/a":  {"label": "mm/year",  "symbol": "mm/a"},
-    "m/d":   {"label": "m/day",    "symbol": "m/d"},
-    "m":     {"label": "meters",   "symbol": "m"},
-    "K":     {"label": "Kelvin",   "symbol": "K"},
-    "1":     {"label": "unitless", "symbol": "1"},
-    "dB":    {"label": "decibels", "symbol": "dB"},
-    "deg":   {"label": "degrees",  "symbol": "deg"},
-}
-
-def create_unit(unit_str: str) -> Unit:
-    mapping = UNIT_MAP.get(unit_str, {"label": unit_str, "symbol": unit_str})
-    return Unit(
-        label={"en": mapping["label"]},
-        symbol=Symbol(value=mapping["symbol"]),
-    )
-```
+- `create_unit(ucum_code: str)` returns a CoverageJSON `Unit` for a valid UCUM
+  (Unified Code for Units of Measure) code, or `None` for an invalid one. A
+  curated table supplies preferred English labels for common codes; any other
+  valid UCUM code falls back to a label derived from pint's canonical unit name
+  (via a `ucumvert` registry). Each `Unit` pairs an English label with a UCUM
+  `Symbol` typed `http://www.opengis.net/def/uom/UCUM/`.
 
 ---
 
