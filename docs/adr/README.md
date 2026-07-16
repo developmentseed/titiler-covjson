@@ -51,3 +51,6 @@ Keep each ADR self-contained, and do not restate conventions already in CLAUDE.m
 - [ADR-0002](0002-dependency-floor-policy.md) -- Dependency floor policy:
   deliberate, verified minimums (lowest-direct plus highest tested in CI,
   Dependabot set to lockfile-only)
+- [ADR-0003](0003-dataset-open-read-error-status.md) -- Dataset open/read
+  failures return HTTP 500 by default (deployment-overridable; no in-library
+  404/500 split)
