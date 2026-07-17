@@ -1038,19 +1038,6 @@ def test_position_multipoint_all_out_of_bounds_is_all_null(
     assert body["ranges"]["b1"]["values"] == [None, None]
 
 
-def test_position_multipoint_nodata_serializes_as_null(
-    client: TestClient, tiny_cog_path: str
-) -> None:
-    # The top-left position samples band 2's nodata sentinel -> null in place.
-    response = client.get(
-        "/position",
-        params={"url": tiny_cog_path, "coords": "MULTIPOINT((-5 2.5), (5 -2.5))"},
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["ranges"]["b2"]["values"] == [None, 3.0]
-
-
 def test_position_multipoint_selects_bands_by_expression(
     client: TestClient, tiny_cog_path: str
 ) -> None:

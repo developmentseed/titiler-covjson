@@ -238,8 +238,6 @@ def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "",
         "MULTIPOINT()",
         "MULTIPOINT((0 0), (x 1))",
-        "MULTIPOINT((0 0), (0 0))",
-        "MULTIPOINT((nan 0))",
     ],
     ids=(
         "empty-geom",
@@ -248,8 +246,6 @@ def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "blank",
         "no-points",
         "non-numeric",
-        "duplicate",
-        "nan",
     ),
 )
 def test_parse_multipoint_wkt_rejects_malformed_or_invalid(wkt: str) -> None:

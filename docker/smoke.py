@@ -114,7 +114,8 @@ def main() -> int:
     width = max(len(label) for label, _ in narrated)
 
     for label, response in narrated:
-        print(_narrate(label, response, width))
+        summary = _summary(response.body)
+        print(f"{label:{width}} -> {response.status}  {summary}".rstrip())
 
     return _report(
         *_bbox_problems(good_bbox),
@@ -243,21 +244,6 @@ def _read(response: HTTPResponse | urllib.error.HTTPError) -> _Response:
         body = None
 
     return _Response(response.status, response.headers.get_content_type(), body)
-
-
-def _narrate(label: str, response: _Response, width: int) -> str:
-    """Build a one-line summary of a request and its outcome.
-
-    Args:
-        label: The request, e.g. ``"GET /position?coords=POINT(0 0)"``.
-        response: The read response.
-        width: The label column width to pad to, so the status columns align.
-
-    Returns:
-        str: ``"<label> -> <status>  <summary>"``, where ``<summary>`` names the
-            coverage a success returned, or the reason an error was refused.
-    """
-    return f"{label:{width}} -> {response.status}  {_summary(response.body)}".rstrip()
 
 
 def _summary(body: Any) -> str:
