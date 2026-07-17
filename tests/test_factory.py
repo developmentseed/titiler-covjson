@@ -12,12 +12,9 @@ from titiler.core.errors import BadRequestError
 from titiler_covjson.factory import (
     CovJSONFactory,
     _output_grid_dimensions,
-    _parse_point_wkt,
-    _parse_polygon_wkt,
     _resolve_grid_dimensions,
     _resolve_read_bands,
 )
-from titiler_covjson.input import Polygon, Position
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
 
 
@@ -652,167 +649,6 @@ def test_bbox_rejects_crs_without_ogc_authority(
     assert "no OGC authority code" in response.json()["detail"]
 
 
-@pytest.mark.parametrize(
-    ("wkt", "expected"),
-    [
-        ("POINT(0 0)", Position(0.0, 0.0)),
-        ("POINT(-5.0 2.5)", Position(-5.0, 2.5)),
-        ("point(1 2)", Position(1.0, 2.0)),
-        ("  POINT ( 1   2 ) ", Position(1.0, 2.0)),
-        ("POINT(1e2 -3.5)", Position(100.0, -3.5)),
-        ("POINT(+1 -2)", Position(1.0, -2.0)),
-    ],
-    ids=["canonical", "decimals", "lowercase", "whitespace", "exponent", "signs"],
-)
-def test_parse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None:
-    assert _parse_point_wkt(wkt) == expected
-
-
-@pytest.mark.parametrize(
-    "wkt",
-    [
-        "POINT Z (0 0 5)",
-        "POINT M (0 0 5)",
-        "POINT ZM (0 0 5 1)",
-        "POINTZ(0 0 5)",
-        "POINT(0 0 5)",
-        "POINT(0 0 5 1)",
-    ],
-    ids=["Z-tag", "M-tag", "ZM-tag", "Z-suffix", "3-token", "4-token"],
-)
-def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
-    # A vertical/measured geometry is rejected: the 2-D raster cannot sample it.
-    with pytest.raises(BadRequestError, match="not supported"):
-        _parse_point_wkt(wkt)
-
-
-@pytest.mark.parametrize(
-    "wkt",
-    [
-        "POINT EMPTY",
-        "MULTIPOINT(0 0)",
-        "LINESTRING(0 0, 1 1)",
-        "not-wkt",
-        "",
-        "POINT()",
-        "POINT(0)",
-        "POINT(1, 2)",
-        "POINT(nan 0)",
-        "POINT(1 inf)",
-        "POINT(1e400 0)",
-    ],
-    ids=[
-        "empty-geom",
-        "multipoint",
-        "linestring",
-        "garbage",
-        "blank",
-        "no-coords",
-        "one-coord",
-        "comma",
-        "nan",
-        "inf",
-        "overflow",
-    ],
-)
-def test_parse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
-    with pytest.raises(BadRequestError, match="Invalid position"):
-        _parse_point_wkt(wkt)
-
-
-@pytest.mark.parametrize(
-    ("wkt", "expected"),
-    [
-        (
-            "POLYGON((0 0, 1 0, 1 1, 0 0))",
-            (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),),
-        ),
-        (
-            "polygon((0 0,1 0,1 1,0 0))",
-            (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),),
-        ),
-        (
-            "  POLYGON (( 0 0, 1 0, 1 1, 0 0 )) ",
-            (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),),
-        ),
-        (
-            "POLYGON((-1e1 -2.5, 1 0, 1 1, -1e1 -2.5))",
-            (((-10.0, -2.5), (1.0, 0.0), (1.0, 1.0), (-10.0, -2.5)),),
-        ),
-    ],
-    ids=["canonical", "lowercase-no-space", "whitespace", "decimals-exp-signs"],
-)
-def test_parse_polygon_wkt_accepts_single_ring(
-    wkt: str, expected: tuple[tuple[tuple[float, float], ...], ...]
-) -> None:
-    assert _parse_polygon_wkt(wkt) == Polygon(rings=expected)
-
-
-def test_parse_polygon_wkt_accepts_holes() -> None:
-    # An exterior ring plus one interior ring (hole) yields two rings.
-    wkt = "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))"
-    polygon = _parse_polygon_wkt(wkt)
-
-    assert len(polygon.rings) == 2
-    assert polygon.rings[1] == (
-        (1.0, 1.0),
-        (2.0, 1.0),
-        (2.0, 2.0),
-        (1.0, 2.0),
-        (1.0, 1.0),
-    )
-
-
-@pytest.mark.parametrize(
-    "wkt",
-    [
-        "POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))",
-        "POLYGON M ((0 0 1, 1 0 1, 1 1 1, 0 0 1))",
-        "POLYGON ZM ((0 0 1 1, 1 0 1 1, 1 1 1 1, 0 0 1 1))",
-        "POLYGON((0 0 5, 1 0 5, 1 1 5, 0 0 5))",
-    ],
-    ids=["Z-tag", "M-tag", "ZM-tag", "3-token-vertex"],
-)
-def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
-    # A 3-D/measured polygon is rejected: the 2-D raster cannot sample a level.
-    with pytest.raises(BadRequestError, match="not supported"):
-        _parse_polygon_wkt(wkt)
-
-
-@pytest.mark.parametrize(
-    "wkt",
-    [
-        "not-wkt",
-        "",
-        "POLYGON EMPTY",
-        "POLYGON(())",
-        "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 0)))",
-        "LINESTRING(0 0, 1 1)",
-        "POLYGON((0 0, 1 0, 1 1, 0 1))",
-        "POLYGON((0 0, 1 0, 0 0))",
-        "POLYGON((nan 0, 1 0, 1 1, nan 0))",
-        "POLYGON((1 inf, 1 0, 1 1, 1 inf))",
-        "POLYGON((0 0, x 0, 1 1, 0 0))",
-    ],
-    ids=[
-        "garbage",
-        "blank",
-        "empty-geom",
-        "empty-ring",
-        "multipolygon",
-        "linestring",
-        "unclosed-ring",
-        "too-few-vertices",
-        "nan",
-        "inf",
-        "non-numeric",
-    ],
-)
-def test_parse_polygon_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
-    with pytest.raises(BadRequestError, match="Invalid polygon"):
-        _parse_polygon_wkt(wkt)
-
-
 @pytest.mark.parametrize("kind", ["image", "point"], ids=["ImageData", "PointData"])
 def test_resolve_read_bands_subsets_info_and_swaps_dtype(kind: str) -> None:
     # The subset path aligns info() metadata (names, descriptions, units) to the
@@ -1038,7 +874,7 @@ def test_position_outside_bounds_is_rejected(client: TestClient, cog_path: str) 
 
 
 def test_position_rejects_bad_coords(client: TestClient, cog_path: str) -> None:
-    # Every _parse_point_wkt rejection flows through the same route wiring to a
+    # Every parse_point_wkt rejection flows through the same route wiring to a
     # 400, and the parse cases are exhaustively unit-tested above, so one
     # representative case here confirms the wiring.
     response = client.get("/position", params={"url": cog_path, "coords": "not-wkt"})
@@ -1377,7 +1213,7 @@ def test_area_hole_beyond_exterior_bounded_before_read(
 
 
 def test_area_rejects_malformed_coords(client: TestClient, cog_path: str) -> None:
-    # _parse_polygon_wkt rejections are exhaustively unit-tested; one case here
+    # parse_polygon_wkt rejections are exhaustively unit-tested; one case here
     # confirms the route wiring turns them into a 400.
     response = client.get("/area", params={"url": cog_path, "coords": "not-wkt"})
     assert response.status_code == 400, response.text

@@ -14,13 +14,12 @@ from covjson_pydantic.domain import CompactAxis, DomainType, ValuesAxis
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.unit import Symbol
 
+from titiler_covjson.geometry import Polygon, Position
 from titiler_covjson.input import (
     BandInfo,
     GridInput,
     PointInput,
-    Polygon,
     PolygonInput,
-    Position,
 )
 from titiler_covjson.modeler import to_coverage
 

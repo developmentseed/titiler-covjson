@@ -70,7 +70,7 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
         >>> import numpy as np
         >>> import rasterio
         >>> from titiler_covjson.input import BandInfo, GridInput, PointInput
-        >>> from titiler_covjson.input import Position
+        >>> from titiler_covjson.geometry import Position
         >>> cov = to_coverage(
         ...     GridInput(
         ...         data=np.ma.MaskedArray(
@@ -120,7 +120,8 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
         holding the polygon (its rings) and one scalar (0-D) range per band (the
         value reduced over the polygon):
 
-        >>> from titiler_covjson.input import Polygon, PolygonInput
+        >>> from titiler_covjson.geometry import Polygon
+        >>> from titiler_covjson.input import PolygonInput
         >>> cov = to_coverage(
         ...     PolygonInput(
         ...         data=np.ma.MaskedArray(np.array([2.5], dtype="float32")),

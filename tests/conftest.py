@@ -184,11 +184,26 @@ def validate_covjson(instance: dict[str, Any], definition: str | None = None) ->
     full ``definitions`` block for ``$ref`` resolution. Otherwise the instance is
     validated against the root schema (a full ``Coverage`` or ``CoverageCollection``
     document).
+
+    The wrapper copies the root's ``$schema``, so both are checked against the same JSON
+    Schema version. Without that line ``jsonschema`` infers a version per schema and
+    picks the newest, which here fails open rather than loudly.
+
+    The version names disguise their order: JSON Schema numbered its drafts up to
+    draft-07, then switched to dates, so draft-07 is the *oldest* version named here and
+    2020-12 the newest. The CoverageJSON schema is written for draft-07 and files all
+    twelve of its per-``domainType`` rules (the axes each domain requires, and their
+    shapes) under ``domainBase.dependencies``. Draft 2019-09 split that keyword into
+    ``dependentSchemas`` and ``dependentRequired``, reserving the old name for
+    compatibility but no longer asserting on it, so a wrapper inferred as 2020-12 reads
+    ``dependencies`` as an unknown keyword. Unknown keywords are ignored rather than
+    rejected, so every domain passed regardless of its ``domainType``.
     """
     schema = (
         SCHEMA
         if definition is None
         else {
+            "$schema": SCHEMA["$schema"],
             "$ref": f"#/definitions/{definition}",
             "definitions": SCHEMA["definitions"],
         }
