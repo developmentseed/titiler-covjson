@@ -56,3 +56,7 @@ Keep each ADR self-contained, and do not restate conventions already in CLAUDE.m
   404/500 split)
 - [ADR-0004](0004-non-temporal-surface-edr-query-verbs.md) -- The non-temporal
   CoverageJSON surface is the EDR non-temporal query verbs; drop XYZ `/tiles`
+- [ADR-0005](0005-trajectory-temporal-multipoint-non-temporal.md) -- The
+  Trajectory domain is temporal (`/trajectory` moves to the Temporal surface);
+  MultiPoint is the non-temporal multi-position query (`/position` +
+  `MULTIPOINT`)

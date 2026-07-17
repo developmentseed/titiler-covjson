@@ -4,6 +4,13 @@
 
 Accepted
 
+Amended by [ADR-0005](0005-trajectory-temporal-multipoint-non-temporal.md): the
+CoverageJSON Trajectory domain requires a `t` coordinate, so `/trajectory` is a
+temporal verb and moves to the Temporal endpoint surface. The non-temporal
+multi-position capability is MultiPoint, delivered through the Position verb
+(`/position` accepting `MULTIPOINT`). The non-temporal surface below should be
+read with that correction.
+
 ## Context
 
 [ADR-0001](0001-covjson-http-api-direction.md) set the API direction to Option B:

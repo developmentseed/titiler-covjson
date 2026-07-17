@@ -4,6 +4,11 @@
 
 Accepted
 
+The follow-on doc updates anticipated under Consequences took a different form:
+doc 05 (implementation roadmap) is retired rather than rewritten, and doc 02
+(bespoke API definition) is reconciled in place against the ADRs. See
+[ADR-0005](0005-trajectory-temporal-multipoint-non-temporal.md).
+
 ## Context
 
 The model layer (`helpers.py`, `input.py`, `modeler.py`) is implemented and tested

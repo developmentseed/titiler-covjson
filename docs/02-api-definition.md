@@ -4,9 +4,14 @@
 > [ADR-0001](adr/0001-covjson-http-api-direction.md) supersedes its overall
 > direction (an OGC API - Environmental Data Retrieval (EDR) aligned vocabulary
 > on a dedicated `BaseFactory` subclass), and
-> [doc 08](08-bbox-endpoint-spec.md) supersedes its `/bbox` treatment. The
-> remaining endpoints below (point, transect, time series, tile, info) have not
-> yet been redesigned under that direction and are retained here for reference.
+> [doc 08](08-bbox-endpoint-spec.md) supersedes its `/bbox` treatment. Of the
+> remaining endpoints below, point has shipped as `/position`; tile is dropped
+> ([ADR-0004](adr/0004-non-temporal-surface-edr-query-verbs.md)); transect is
+> reclassified as the temporal `/trajectory`, its spatial-only case served by
+> `/position` with a `MULTIPOINT`
+> ([ADR-0005](adr/0005-trajectory-temporal-multipoint-non-temporal.md)); and
+> time series and info have not yet been redesigned. All are retained here for
+> reference.
 
 ## 1. API Design Principles
 
@@ -197,6 +202,14 @@ GET /covjson/transect
 | `nodata` | float | no | Override nodata value |
 
 **Response**: `Coverage` with `DomainType: Trajectory`
+
+> **Correction
+> ([ADR-0005](adr/0005-trajectory-temporal-multipoint-non-temporal.md)).**
+> The example below is schema-invalid: a CoverageJSON Trajectory requires a `t`
+> coordinate in every composite tuple (`["t", "x", "y"]`), so a spatial-only
+> line like this one is a **MultiPoint** coverage, not a Trajectory. A
+> `t`-bearing Trajectory is the temporal `/trajectory` verb; a spatial
+> multi-position sample is the Position verb with a `MULTIPOINT` geometry.
 
 ```json
 {
