@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 from titiler_covjson.reduce import Stat, reduce_each_band
 
 if TYPE_CHECKING:
@@ -301,6 +301,68 @@ class PolygonInput(_CoverageInputBase):
             msg = (
                 "Polygon data must have shape (bands,); "
                 f"got {self.data.ndim} dimensions"
+            )
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, eq=False, kw_only=True)
+class MultiPointInput(_CoverageInputBase):
+    """MultiPoint (many positions, one value per band per position) domain input.
+
+    ``data`` is a 2-D masked array shaped ``(bands, positions)``: one sampled
+    value per band at each position, with the position axis aligned to
+    ``geometry.positions`` in order. ``geometry`` gives the sampled positions in
+    ``crs``. This is the variant :func:`pointdata_to_multipoint_input` produces
+    from a per-position sequence of rio-tiler ``PointData`` reads. A masked entry
+    marks a band with no value at that position (outside the dataset, or nodata),
+    which serializes as ``null``.
+
+    Attributes:
+        geometry: The sampled positions, in ``crs``.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from titiler_covjson.geometry import MultiPoint
+        >>> cov = MultiPointInput(
+        ...     data=np.ma.MaskedArray(np.array([[1.5, 2.5]], dtype="float32")),
+        ...     geometry=MultiPoint(positions=((-5.0, 2.5), (-4.0, 3.5))),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bands=(BandInfo("b1", unit="mm"),),
+        ... )
+        >>> cov.data.shape
+        (1, 2)
+        >>> len(cov.geometry.positions)
+        2
+    """
+
+    geometry: MultiPoint
+
+    def _validate_shape(self) -> None:
+        """Require 2-D ``(bands, positions)`` data aligned to the geometry.
+
+        The ``ndim`` check precedes the position-count check on purpose: the
+        latter indexes ``data.shape[1]``, which a non-2-D array does not have, so
+        checking dimensionality first turns a 1-D array into this ``ValueError``
+        rather than an ``IndexError``.
+
+        Raises:
+            ValueError: If ``data`` is not 2-D, or its position axis length does
+                not match the number of positions in ``geometry``.
+        """
+        if self.data.ndim != 2:
+            msg = (
+                "MultiPoint data must have shape (bands, positions); "
+                f"got {self.data.ndim} dimensions"
+            )
+            raise ValueError(msg)
+
+        n_positions = len(self.geometry.positions)
+
+        if self.data.shape[1] != n_positions:
+            msg = (
+                f"Number of positions ({n_positions}) does not match "
+                f"data.shape[1] ({self.data.shape[1]})"
             )
             raise ValueError(msg)
 
