@@ -7,8 +7,9 @@ everything a CoverageJSON document needs: band descriptions and units,
 timestamps, source geometry, or collection/item provenance. This module
 defines the per-domain input variants
 that carry it: a shared base plus one frozen dataclass per domain
-(:class:`GridInput` and :class:`PointInput` now; a PointSeries variant follows),
-grouped under the :data:`CoverageInput` alias that endpoint code fills from
+(:class:`GridInput`, :class:`PointInput`, and :class:`PolygonInput` now; a
+PointSeries variant follows), grouped under the :data:`CoverageInput` alias that
+endpoint code fills from
 whatever it read and that the modeler consumes to build covjson-pydantic
 ``Coverage`` objects.
 
@@ -21,10 +22,12 @@ can be tested from plain numpy arrays without raster files or readers.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from titiler_covjson.reduce import Stat, reduce_each_band
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -108,6 +111,92 @@ class Position:
                 f"x={self.x}, y={self.y}, z={self.z}."
             )
             raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class Polygon:
+    """A polygon geometry: one exterior ring and zero or more interior rings.
+
+    Carries the polygon's linear rings as ``(exterior, *holes)``. Each ring is a
+    sequence of ``(x, y)`` vertices, closed so the first and last vertex coincide.
+    The coordinate reference system is not stored here: it lives alongside on the
+    :class:`CoverageInput` variant that holds the polygon (as ``crs``), so the
+    vertex coordinates are bare numbers expressed in that CRS.
+
+    Attributes:
+        rings: The linear rings as ``(exterior, *holes)``. The first ring is the
+            exterior boundary; any further rings are interior boundaries (holes).
+            Each ring is a tuple of ``(x, y)`` vertices, closed (first vertex
+            equal to last).
+    """
+
+    rings: tuple[tuple[tuple[float, float], ...], ...]
+
+    def __post_init__(self) -> None:
+        """Reject a structurally invalid or non-finite polygon at construction.
+
+        A ring that is unclosed, too short to bound an area, or carries a NaN or
+        infinite coordinate names no region on the ground and would produce an
+        invalid clip or a silently corrupt domain axis, so it is rejected here
+        where the value becomes a :class:`Polygon`.
+
+        Raises:
+            ValueError: If there are no rings; if any coordinate is not finite
+                (NaN or infinity); if any ring has fewer than four vertices; or if
+                any ring is not closed (its first vertex differs from its last).
+        """
+        if not self.rings:
+            msg = "A polygon must have at least one ring (the exterior ring)."
+            raise ValueError(msg)
+
+        coordinates = [
+            coordinate
+            for ring in self.rings
+            for vertex in ring
+            for coordinate in vertex
+        ]
+
+        if not all(map(math.isfinite, coordinates)):
+            msg = "Polygon coordinates must be finite (not NaN or infinity)."
+            raise ValueError(msg)
+
+        for ring in self.rings:
+            if len(ring) < 4:
+                msg = (
+                    "Each polygon ring must have at least four vertices "
+                    f"(a closed triangle); got {len(ring)}."
+                )
+                raise ValueError(msg)
+
+            if ring[0] != ring[-1]:
+                msg = (
+                    "Each polygon ring must be closed (first vertex equal to last); "
+                    f"got {ring[0]} != {ring[-1]}."
+                )
+                raise ValueError(msg)
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        """The ``(minx, miny, maxx, maxy)`` bounding box spanning every ring.
+
+        Spans all rings, not just the exterior. Construction is permissive and
+        does not enforce that holes lie inside the exterior, and the read a
+        polygon drives (rio-tiler's ``feature``) bounds every ring, so an interior
+        ring reaching past the exterior must widen this box too; otherwise it
+        could slip a large read past a cell-count ceiling checked here. For a
+        well-formed polygon, whose holes lie inside the exterior, this equals the
+        exterior's box. A degenerate polygon (a point or an axis-aligned line) has
+        ``minx == maxx`` or ``miny == maxy``.
+
+        Returns:
+            tuple[float, float, float, float]: The bounding box, in the holder's
+                CRS.
+        """
+        vertices = [vertex for ring in self.rings for vertex in ring]
+        xs = [x for x, _ in vertices]
+        ys = [y for _, y in vertices]
+
+        return min(xs), min(ys), max(xs), max(ys)
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -212,7 +301,7 @@ class GridInput(_CoverageInputBase):
 
     ``data`` is a 3-D masked array shaped ``(bands, height, width)``; ``bounds``
     gives its spatial extent in ``crs``. This is the variant
-    :func:`imagedata_to_coverage_input` produces from a rio-tiler ``ImageData``.
+    :func:`imagedata_to_grid_input` produces from a rio-tiler ``ImageData``.
 
     Attributes:
         bounds: Spatial bounds as ``(west, south, east, north)``, in ``crs``.
@@ -257,7 +346,7 @@ class PointInput(_CoverageInputBase):
 
     ``data`` is a 1-D masked array shaped ``(bands,)``: one sampled value per
     band at a single location. ``position`` gives that location in ``crs``. This
-    is the variant :func:`pointdata_to_coverage_input` produces from a rio-tiler
+    is the variant :func:`pointdata_to_point_input` produces from a rio-tiler
     ``PointData``, whose ``array`` is already 1-D per band.
 
     Attributes:
@@ -293,11 +382,59 @@ class PointInput(_CoverageInputBase):
             raise ValueError(msg)
 
 
-# Alias for the per-domain input union. GridInput and PointInput are both
-# members (the EDR /position slice, #44); the modeler's `match` dispatches on
-# each, and `assert_never` in its default arm enforces exhaustiveness as further
-# variants (e.g., PointSeriesInput) join.
-CoverageInput = GridInput | PointInput
+@dataclass(frozen=True, eq=False, kw_only=True)
+class PolygonInput(_CoverageInputBase):
+    """Polygon (single polygon, scalar-per-band zonal reduction) domain input.
+
+    ``data`` is a 1-D masked array shaped ``(bands,)``: one reduced scalar per
+    band summarizing the raster over ``geometry`` (the same shape contract as
+    :class:`PointInput`). ``geometry`` gives that polygon in ``crs``. This is the
+    variant :func:`imagedata_to_polygon_input` produces after clipping a raster
+    to a polygon and reducing it by a statistic. A masked entry marks a band with
+    no valid pixels (an empty or all-nodata polygon), which serializes as
+    ``null``.
+
+    Attributes:
+        geometry: The polygon the values summarize, in ``crs``.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> cov = PolygonInput(
+        ...     data=np.ma.MaskedArray(np.array([1.5], dtype="float32")),
+        ...     geometry=Polygon(
+        ...         rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),)
+        ...     ),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bands=(BandInfo("b1", unit="mm"),),
+        ... )
+        >>> cov.data.shape
+        (1,)
+        >>> len(cov.geometry.rings)
+        1
+    """
+
+    geometry: Polygon
+
+    def _validate_shape(self) -> None:
+        """Require 1-D ``(bands,)`` data.
+
+        Raises:
+            ValueError: If ``data`` is not 1-D.
+        """
+        if self.data.ndim != 1:
+            msg = (
+                "Polygon data must have shape (bands,); "
+                f"got {self.data.ndim} dimensions"
+            )
+            raise ValueError(msg)
+
+
+# Alias for the per-domain input union. GridInput, PointInput, and PolygonInput
+# are members; the modeler's `match` dispatches on each, and `assert_never` in
+# its default arm enforces exhaustiveness as further variants (e.g.,
+# PointSeriesInput) join.
+CoverageInput = GridInput | PointInput | PolygonInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
@@ -308,7 +445,7 @@ def band_info_from_reader_info(info: Info) -> list[BandInfo]:
     metadata into a :class:`CoverageInput`::
 
         info = band_info_from_reader_info(reader.info())
-        coverage_input = imagedata_to_coverage_input(img, bands=info)
+        coverage_input = imagedata_to_grid_input(img, bands=info)
 
     Band names and descriptions come from ``info.band_descriptions``; units
     are probed from the per-band GDAL tags in ``info.band_metadata`` using,
@@ -503,7 +640,7 @@ def _require_crs(
     return resolved_crs
 
 
-def imagedata_to_coverage_input(
+def imagedata_to_grid_input(
     img: ImageData,
     *,
     bands: Sequence[BandInfo] | None = None,
@@ -558,7 +695,7 @@ def imagedata_to_coverage_input(
         ...     crs=rasterio.CRS.from_epsg(4326),
         ...     bounds=(-10.0, -5.0, 10.0, 5.0),
         ... )
-        >>> cov = imagedata_to_coverage_input(img)
+        >>> cov = imagedata_to_grid_input(img)
         >>> cov.bounds
         (-10.0, -5.0, 10.0, 5.0)
         >>> [band.name for band in cov.bands]
@@ -576,7 +713,7 @@ def imagedata_to_coverage_input(
         ...     crs=rasterio.CRS.from_epsg(4326),
         ...     bounds=(-10.0, -5.0, 10.0, 5.0),
         ... )
-        >>> cov = imagedata_to_coverage_input(img)
+        >>> cov = imagedata_to_grid_input(img)
         >>> cov.data
         masked_array(
           data=[[[42.0, --],
@@ -603,7 +740,7 @@ def imagedata_to_coverage_input(
     )
 
 
-def pointdata_to_coverage_input(
+def pointdata_to_point_input(
     point: PointData,
     *,
     position: Position,
@@ -647,7 +784,7 @@ def pointdata_to_coverage_input(
         ...     np.ma.MaskedArray(np.array([1.5, 2.5], dtype="float32")),
         ...     crs=rasterio.CRS.from_epsg(4326),
         ... )
-        >>> cov = pointdata_to_coverage_input(point, position=Position(-5.0, 2.5))
+        >>> cov = pointdata_to_point_input(point, position=Position(-5.0, 2.5))
         >>> cov.data.shape
         (2,)
         >>> [band.name for band in cov.bands]
@@ -662,4 +799,85 @@ def pointdata_to_coverage_input(
         position=position,
         crs=resolved_crs,
         bands=_resolve_bands(point, bands, None, None, None),
+    )
+
+
+def imagedata_to_polygon_input(
+    img: ImageData,
+    *,
+    geometry: Polygon,
+    stat: Stat,
+    bands: Sequence[BandInfo] | None = None,
+    crs: rasterio.CRS | None = None,
+) -> PolygonInput:
+    """Reduce a polygon-clipped rio-tiler ``ImageData`` to a :class:`PolygonInput`.
+
+    This is the converter used by an area query: a raster clipped to a polygon
+    (its outside-polygon and nodata pixels already masked) is reduced to one
+    scalar per band by ``stat``. Unlike the grid and point converters, the
+    statistic shapes the per-band output metadata, not just its values:
+
+    - ``dtype`` is taken from the *reduced* array, not the source raster (``mean``
+      of an integer raster is float; ``count`` is integer), so the range's
+      declared type and its values agree (the grid and point paths get this for
+      free, where the band dtype is the array dtype);
+    - the ``description`` is rewritten to name the reduction (e.g.,
+      ``"mean of precipitation"``), so the coverage self-describes which statistic
+      produced the value;
+    - the ``unit`` is the source unit for a unit-preserving reduction, but dropped
+      for ``count`` (a dimensionless number of valid pixels).
+
+    Band names come from an explicit ``bands`` sequence when given, otherwise the
+    image's own ``band_names``.
+
+    Args:
+        img: The clipped source image, e.g., from ``Reader.feature()``.
+        geometry: The polygon the reduced values summarize, in ``crs``.
+        stat: The statistic to reduce each band by.
+        bands: Complete per-band metadata supplying the source names,
+            descriptions, and units; the dtype, description, and unit are all
+            derived from the reduction. Defaults to the image's ``band_names``.
+        crs: CRS overriding ``img.crs``.
+
+    Returns:
+        PolygonInput: The intermediate representation of the reduced polygon.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from rio_tiler.models import ImageData
+        >>> from titiler_covjson.reduce import Stat
+        >>> img = ImageData(
+        ...     np.ma.MaskedArray(np.arange(8, dtype="float32").reshape(2, 2, 2)),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bounds=(0.0, 0.0, 2.0, 2.0),
+        ... )
+        >>> geometry = Polygon(
+        ...     rings=(((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)),)
+        ... )
+        >>> cov = imagedata_to_polygon_input(img, geometry=geometry, stat=Stat.MEAN)
+        >>> cov.data.tolist()
+        [1.5, 5.5]
+    """
+    reduced = reduce_each_band(img.array, stat)
+    resolved_crs = _require_crs(img, crs)
+
+    # The statistic shapes each band's output metadata: dtype from the reduced
+    # array, a description naming the reduction, and the source unit (dropped for
+    # count, a dimensionless pixel count). Only the band name carries through.
+    typed_bands = tuple(
+        replace(
+            band,
+            dtype=reduced.dtype,
+            description=f"{stat.label} of {band.description or band.name}",
+            unit=band.unit if stat.preserves_unit else "",
+        )
+        for band in _resolve_bands(img, bands, None, None, None)
+    )
+
+    return PolygonInput(
+        data=reduced,
+        geometry=geometry,
+        crs=resolved_crs,
+        bands=typed_bands,
     )

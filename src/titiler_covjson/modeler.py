@@ -10,7 +10,7 @@ be tested from plain numpy arrays.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, Any, assert_never
 
 from covjson_pydantic.coverage import Coverage
 from covjson_pydantic.domain import Axes, CompactAxis, Domain, DomainType, ValuesAxis
@@ -22,7 +22,7 @@ from titiler_covjson.helpers import (
     create_unit,
     numpy_dtype_to_ndarray,
 )
-from titiler_covjson.input import GridInput, PointInput
+from titiler_covjson.input import GridInput, PointInput, PolygonInput
 
 if TYPE_CHECKING:
     from covjson_pydantic.ndarray import (
@@ -48,9 +48,11 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
     """Convert a :class:`CoverageInput` to a CovJSON ``Coverage``.
 
     Dispatches on the concrete input variant via ``match``:
-    :class:`~titiler_covjson.input.GridInput` becomes a Grid coverage and
-    :class:`~titiler_covjson.input.PointInput` a Point coverage. Other domain
-    variants (such as PointSeries) are not yet supported.
+    :class:`~titiler_covjson.input.GridInput` becomes a Grid coverage,
+    :class:`~titiler_covjson.input.PointInput` a Point coverage, and
+    :class:`~titiler_covjson.input.PolygonInput` a Polygon coverage (a scalar
+    zonal reduction over the polygon). Other domain variants (such as
+    PointSeries) are not yet supported.
 
     Args:
         coverage_input: The intermediate representation to convert.
@@ -113,6 +115,30 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
         ([], [])
         >>> cov.ranges["temp"].values
         [21.5]
+
+        A polygon input becomes a Polygon coverage: a single ``composite`` axis
+        holding the polygon (its rings) and one scalar (0-D) range per band (the
+        value reduced over the polygon):
+
+        >>> from titiler_covjson.input import Polygon, PolygonInput
+        >>> cov = to_coverage(
+        ...     PolygonInput(
+        ...         data=np.ma.MaskedArray(np.array([2.5], dtype="float32")),
+        ...         geometry=Polygon(
+        ...             rings=(((0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)),)
+        ...         ),
+        ...         crs=rasterio.CRS.from_epsg(4326),
+        ...         bands=(BandInfo("temp", unit="Cel"),),
+        ...     )
+        ... )
+        >>> cov.domain.domainType.value
+        'Polygon'
+        >>> cov.domain.axes.composite.dataType
+        'polygon'
+        >>> cov.ranges["temp"].axisNames, cov.ranges["temp"].shape
+        ([], [])
+        >>> cov.ranges["temp"].values
+        [2.5]
     """
     match coverage_input:
         case GridInput():
@@ -125,7 +151,13 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
             return Coverage(
                 domain=_create_point_domain(coverage_input),
                 parameters=_create_parameters(coverage_input),
-                ranges=_create_point_ranges(coverage_input),
+                ranges=_create_scalar_ranges(coverage_input),
+            )
+        case PolygonInput():
+            return Coverage(
+                domain=_create_polygon_domain(coverage_input),
+                parameters=_create_parameters(coverage_input),
+                ranges=_create_scalar_ranges(coverage_input),
             )
         case _:  # pragma: no cover
             assert_never(coverage_input)
@@ -270,17 +302,57 @@ def _create_point_domain(coverage_input: PointInput) -> Domain:
     )
 
 
-def _create_point_ranges(coverage_input: PointInput) -> dict[str, RangeValue]:
-    """Build one scalar (0-D) range ``NdArray`` per band, keyed by band name.
+def _create_polygon_domain(coverage_input: PolygonInput) -> Domain:
+    """Build the Polygon ``Domain`` (a single composite polygon axis plus referencing).
 
     Args:
-        coverage_input: The point input whose per-band samples become ranges.
+        coverage_input: The polygon input being converted.
+
+    Returns:
+        Domain: A Polygon domain whose ``composite`` axis holds the one polygon
+            the values summarize (its exterior ring plus any holes), with
+            2-D spatial referencing.
+    """
+    # A Polygon domain uses a single `composite` axis carrying exactly one
+    # polygon: its value is the list of rings [exterior, *holes], each ring a
+    # list of [x, y] vertices. `coordinates` names the vertex components and is
+    # constant ("x", "y") because vertices are always stored x (longitude/
+    # easting) then y (latitude/northing). This must NOT be forced to match the
+    # CRS axis order in `referencing` (which is ["y", "x"] for a latitude-first
+    # CRS such as EPSG:4326): the two arrays describe different things (vertex
+    # layout vs CRS axis order), and unifying them would make a strict consumer
+    # read a stored [lon, lat] vertex as [lat, lon]. See
+    # create_spatial_2d_reference for the referencing side.
+    return Domain(
+        domainType=DomainType.polygon,
+        axes=Axes(
+            composite=ValuesAxis[tuple[Any, ...]](
+                dataType="polygon",
+                coordinates=["x", "y"],
+                values=[coverage_input.geometry.rings],
+            ),
+        ),
+        referencing=[create_spatial_2d_reference(coverage_input.crs)],
+    )
+
+
+def _create_scalar_ranges(
+    coverage_input: PointInput | PolygonInput,
+) -> dict[str, RangeValue]:
+    """Build one scalar (0-D) range ``NdArray`` per band, keyed by band name.
+
+    Shared by the Point and Polygon domains, which both carry a single value per
+    band (a sample at a location, or a statistic over a polygon).
+
+    Args:
+        coverage_input: The point or polygon input whose per-band values become
+            ranges.
 
     Returns:
         dict[str, RangeValue]: Range arrays keyed by band name, each a 0-D
             scalar (``shape=[]``, ``axisNames=[]``).
     """
-    # The i-th band describes data[i], one sampled scalar per band. Slice
+    # The i-th band describes data[i], one scalar per band. Slice
     # (data[i : i + 1]) rather than integer-index (data[i]): indexing a 1-D
     # (bands,) array returns a bare numpy scalar (no .filled/.astype) for an
     # unmasked band, whereas the slice stays a (1,) MaskedArray that .reshape(())

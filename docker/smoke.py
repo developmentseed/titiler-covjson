@@ -1,10 +1,10 @@
 """End-to-end smoke check for the CoverageJSON container.
 
-Waits for the demo server, requests a CoverageJSON Grid (``/bbox``) and Point
-(``/position``) for the bundled sample Cloud-Optimized GeoTIFF (COG), and asserts
-each response is a valid, non-empty CoverageJSON document. Runs on the host (via
-``uv run``) so the image carries no test dependencies. Exits non-zero on any
-failure.
+Waits for the demo server, requests a CoverageJSON Grid (``/bbox``), Point
+(``/position``), and Polygon (``/area``) coverage for the bundled sample
+Cloud-Optimized GeoTIFF (COG), and asserts each response is a valid, non-empty
+CoverageJSON document. Runs on the host (via ``uv run``) so the image carries no
+test dependencies. Exits non-zero on any failure.
 
 Run against a container published on ``localhost:8000``:
 ``uv run python docker/smoke.py``.
@@ -29,6 +29,7 @@ COG_URL = "/data/sample.tif"  # the sample COG baked into the image
 BBOX = "-10,-5,10,5"
 BASE_BBOX_URL = f"{BASE_URL}/bbox/{BBOX}"
 BASE_POSITION_URL = f"{BASE_URL}/position"
+BASE_AREA_URL = f"{BASE_URL}/area"
 MEDIA_TYPE = "application/prs.coverage+json"
 READINESS_TIMEOUT_S = 30.0
 REQUEST_TIMEOUT_S = 10.0  # per-request socket timeout, so a hung server fails fast
@@ -41,6 +42,11 @@ N_SAMPLE_CELLS = 24 * 24
 # valid ramp sample rather than a fixed value. The unit tests pin exact values on
 # an exact-pixel-size fixture instead.
 POSITION_COORDS = "POINT(0 0)"
+# A polygon over the whole sample extent reduces each band to one scalar. The
+# default statistic is the mean, which for the 0 .. 575 ramp lands inside the
+# ramp's range; the smoke asserts a finite in-range scalar rather than an exact
+# mean, since the cutline's edge-cell inclusion is not worth pinning here.
+AREA_COORDS = "POLYGON((-10 -5, 10 -5, 10 5, -10 5, -10 -5))"
 # The vendored CoverageJSON JSON Schema, read by path: this script deliberately
 # does not import test modules or covjson-pydantic; it validates raw JSON exactly
 # as the test suite does.
@@ -56,10 +62,11 @@ SCHEMA_PATH = (
 def main() -> int:
     """Request the demo endpoints and assert valid, non-empty CoverageJSON.
 
-    Exercises both routes -- a ``/bbox`` Grid coverage and a ``/position`` Point
-    coverage -- and sends one deliberately invalid request (an unsupported ``f``)
-    that must be a 400, proving the container maps bad input through its mounted
-    exception handlers instead of letting it surface as a 500.
+    Exercises all three routes (a ``/bbox`` Grid coverage, a ``/position`` Point
+    coverage, and an ``/area`` Polygon coverage), and sends one deliberately
+    invalid request (an unsupported ``f``) that must be a 400, proving the
+    container maps bad input through its mounted exception handlers instead of
+    letting it surface as a 500.
 
     Returns:
         Process exit code: 0 when every check passes, 1 otherwise.
@@ -67,10 +74,12 @@ def main() -> int:
     good_bbox = _get_when_ready(_bbox_url(BASE_BBOX_URL, "CoverageJSON"))
     bad_bbox = _get(_bbox_url(BASE_BBOX_URL, "png"))
     position = _get(_position_url(POSITION_COORDS))
+    area = _get(_area_url(AREA_COORDS))
 
     return _report(
         *_bbox_problems(good_bbox),
         *_position_problems(position),
+        *_area_problems(area),
         *_bad_input_problems(bad_bbox),
     )
 
@@ -102,6 +111,20 @@ def _position_url(coords: str) -> str:
     query = urllib.parse.urlencode({"url": COG_URL, "coords": coords})
 
     return f"{BASE_POSITION_URL}?{query}"
+
+
+def _area_url(coords: str) -> str:
+    """Build an /area request URL for the given WKT polygon.
+
+    Args:
+        coords: The WKT polygon for the ``coords`` query parameter.
+
+    Returns:
+        The absolute request URL carrying the ``url`` and ``coords`` parameters.
+    """
+    query = urllib.parse.urlencode({"url": COG_URL, "coords": coords})
+
+    return f"{BASE_AREA_URL}?{query}"
 
 
 def _get_when_ready(url: str) -> HTTPResponse | urllib.error.HTTPError:
@@ -195,6 +218,26 @@ def _position_problems(
 
     yield from _envelope_problems(response.status, response.headers.get_content_type())
     yield from _position_content_problems(body)
+
+
+def _area_problems(
+    response: HTTPResponse | urllib.error.HTTPError,
+) -> Iterator[str]:
+    """Yield every envelope and content problem for the /area response.
+
+    Reads the response once (the body is a single-use stream) and dispatches to
+    the shared envelope check and the Polygon-specific content check.
+
+    Args:
+        response: The response to the /area CoverageJSON request.
+
+    Yields:
+        A description of each envelope or content mismatch.
+    """
+    body = json.loads(response.read())
+
+    yield from _envelope_problems(response.status, response.headers.get_content_type())
+    yield from _area_content_problems(body)
 
 
 def _envelope_problems(status: int | None, content_type: str) -> Iterator[str]:
@@ -408,6 +451,87 @@ def _is_ramp_value(value: Any) -> bool:
     )
 
 
+def _area_content_problems(body: dict[str, Any]) -> Iterator[str]:
+    """Yield any problem with the Polygon document's structure and value.
+
+    A schema-invalid body short-circuits: its structure is unreliable, so the
+    later structural and value checks would only add noise.
+
+    Args:
+        body: The parsed CoverageJSON /area response.
+
+    Yields:
+        A description of each mismatch; nothing when the document is a valid
+        Polygon coverage carrying a sane reduced value per band.
+    """
+    try:
+        jsonschema.validate(body, json.loads(SCHEMA_PATH.read_text()))
+    except jsonschema.ValidationError as error:
+        yield f"area schema invalid: {error.message}"
+
+        return
+
+    if (type_ := body.get("type")) != "Coverage":
+        yield f"area type {type_!r} != 'Coverage'"
+
+    if (domain_type := body.get("domain", {}).get("domainType")) != "Polygon":
+        yield f"area domain.domainType {domain_type!r} != 'Polygon'"
+
+    ranges = body.get("ranges", {})
+
+    if not ranges:
+        yield "area ranges is empty"
+
+        return
+
+    yield from _area_scalar_problems(ranges)
+
+
+def _area_scalar_problems(ranges: dict[str, Any]) -> Iterator[str]:
+    """Yield a mismatch for any range that is not a sane reduced scalar.
+
+    Each band of a Polygon coverage is a 0-D scalar: an empty ``shape`` with a
+    single value. A polygon over the whole sample reduces the 0 .. 575 ramp by
+    the mean, so each band's value must be a finite number inside the ramp's
+    range (never null, which would mean no valid pixels were reduced).
+
+    Args:
+        ranges: The response ``ranges`` mapping of band name to NdArray.
+
+    Yields:
+        A description for each range that is not a single in-range scalar.
+    """
+    for name, band in ranges.items():
+        values = band.get("values", [])
+
+        if band.get("shape") != [] or len(values) != 1:
+            yield (
+                f"area range {name!r}: expected one scalar value (empty shape), "
+                f"got shape {band.get('shape')!r}, {len(values)} value(s)"
+            )
+        elif not _is_reduced_value(values[0]):
+            yield (
+                f"area range {name!r}: value {values[0]!r} is not a finite "
+                f"reduction in 0 .. {N_SAMPLE_CELLS - 1}"
+            )
+
+
+def _is_reduced_value(value: Any) -> bool:
+    """Return whether ``value`` is a finite reduced scalar in the ramp's range.
+
+    Unlike a point sample, a reduced statistic (e.g., the mean) need not be a
+    whole number, so this accepts any number in range; ``None`` (no valid pixels)
+    and ``inf``/``nan`` (out of range) are rejected.
+
+    Args:
+        value: A range scalar from the response.
+
+    Returns:
+        True when ``value`` is a number within ``0 .. N_SAMPLE_CELLS - 1``.
+    """
+    return isinstance(value, (int, float)) and 0.0 <= value <= N_SAMPLE_CELLS - 1
+
+
 def _bad_input_problems(
     response: HTTPResponse | urllib.error.HTTPError,
 ) -> Iterator[str]:
@@ -438,7 +562,7 @@ def _report(*problems: str) -> int:
 
     if not collected:
         print(
-            "smoke check passed: CoverageJSON Grid and Point served; "
+            "smoke check passed: CoverageJSON Grid, Point, and Polygon served; "
             "bad input rejected as 400"
         )
 

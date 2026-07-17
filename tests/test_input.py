@@ -14,15 +14,21 @@ from titiler_covjson.input import (
     BandInfo,
     GridInput,
     PointInput,
+    Polygon,
+    PolygonInput,
     Position,
     band_info_from_reader_info,
-    imagedata_to_coverage_input,
-    pointdata_to_coverage_input,
+    imagedata_to_grid_input,
+    imagedata_to_polygon_input,
+    pointdata_to_point_input,
 )
+from titiler_covjson.reduce import Stat
 
 BOUNDS = (-10.0, -5.0, 10.0, 5.0)
 CRS_EPSG_3857 = rasterio.CRS.from_epsg(3857)
 POSITION = Position(1.0, 2.0)
+# A unit square exterior ring (closed), no holes.
+SQUARE = Polygon(rings=(((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)),))
 
 
 def make_image(
@@ -90,6 +96,18 @@ def point_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> PointInput:
         PointInput: An input with a default position and CRS.
     """
     return PointInput(data=data, position=POSITION, crs=CRS_EPSG_3857)
+
+
+def polygon_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> PolygonInput:
+    """Build a minimal PolygonInput around the given array.
+
+    Args:
+        data: The masked data array, shaped ``(bands,)``.
+
+    Returns:
+        PolygonInput: An input with a default polygon geometry and CRS.
+    """
+    return PolygonInput(data=data, geometry=SQUARE, crs=CRS_EPSG_3857)
 
 
 class TestBandInfo:
@@ -207,7 +225,7 @@ class TestImagedataToCoverageInput:
     def test_basic_conversion(self) -> None:
         """Array, bounds, CRS, band names, and dtype all carry over."""
         img = make_image()
-        cov = imagedata_to_coverage_input(img)
+        cov = imagedata_to_grid_input(img)
 
         assert cov.data is img.array
         assert cov.bounds == BOUNDS
@@ -223,7 +241,7 @@ class TestImagedataToCoverageInput:
         arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.MaskedArray(
             np.ones((2, 4, 4), dtype="float32"), mask=mask
         )
-        cov = imagedata_to_coverage_input(make_image(arr))
+        cov = imagedata_to_grid_input(make_image(arr))
 
         cov_mask = np.ma.getmaskarray(cov.data)
         assert cov_mask[0, 0, 0]
@@ -233,7 +251,7 @@ class TestImagedataToCoverageInput:
     def test_plain_array_gets_materialized_mask(self) -> None:
         """A plain ndarray input still yields a fully materialized mask."""
         img = make_image(np.ones((2, 4, 4), dtype="float32"))
-        cov = imagedata_to_coverage_input(img)
+        cov = imagedata_to_grid_input(img)
 
         assert np.ma.getmaskarray(cov.data).shape == (2, 4, 4)
         assert not cov.data.mask.any()
@@ -243,21 +261,21 @@ class TestImagedataToCoverageInput:
         data = np.full((1, 4, 4), -9999.0, dtype="float32")
         data[0, 1, 1] = 42.0
         arr = np.ma.masked_equal(data, -9999.0)
-        cov = imagedata_to_coverage_input(make_image(arr))
+        cov = imagedata_to_grid_input(make_image(arr))
 
         assert cov.data.mask.sum() == 15
         assert cov.data[0, 1, 1] == 42.0
 
     def test_2d_array_coerced_to_3d(self) -> None:
         """Single-band 2-D input becomes (1, h, w) with one band."""
-        cov = imagedata_to_coverage_input(make_image(np.zeros((4, 4), dtype="float32")))
+        cov = imagedata_to_grid_input(make_image(np.zeros((4, 4), dtype="float32")))
 
         assert cov.data.shape == (1, 4, 4)
         assert [band.name for band in cov.bands] == ["b1"]
 
     def test_band_attribute_overrides(self) -> None:
         """band_names/band_descriptions/band_units kwargs override defaults."""
-        cov = imagedata_to_coverage_input(
+        cov = imagedata_to_grid_input(
             make_image(),
             band_names=["red", "nir"],
             band_descriptions=["Red band", "Near infrared"],
@@ -274,7 +292,7 @@ class TestImagedataToCoverageInput:
         kwargs: dict[str, Any] = {kwarg: ["only-one"]}
 
         with pytest.raises(ValueError, match=f"`{kwarg}` has 1 entries"):
-            imagedata_to_coverage_input(make_image(), **kwargs)
+            imagedata_to_grid_input(make_image(), **kwargs)
 
     def test_mismatched_img_band_names_raises(self) -> None:
         """Defaulted names from a malformed ImageData get a clear error.
@@ -285,12 +303,12 @@ class TestImagedataToCoverageInput:
         img = make_image(band_names=["only-one"])
 
         with pytest.raises(ValueError, match="`band_names` has 1 entries"):
-            imagedata_to_coverage_input(img)
+            imagedata_to_grid_input(img)
 
     def test_bands_kwarg_applied(self) -> None:
         """An explicit bands sequence is stored as a tuple, entries unchanged."""
         bands = [BandInfo("a", description="alpha"), BandInfo("b", unit="m")]
-        cov = imagedata_to_coverage_input(make_image(), bands=bands)
+        cov = imagedata_to_grid_input(make_image(), bands=bands)
 
         assert cov.bands == tuple(bands)
 
@@ -298,7 +316,7 @@ class TestImagedataToCoverageInput:
     def test_bands_kwarg_conflicts_with_overrides(self, band_names: list[str]) -> None:
         """bands= is mutually exclusive with overrides, even empty ones."""
         with pytest.raises(ValueError, match="Cannot combine `bands`"):
-            imagedata_to_coverage_input(
+            imagedata_to_grid_input(
                 make_image(),
                 bands=[BandInfo("a"), BandInfo("b")],
                 band_names=band_names,
@@ -307,28 +325,28 @@ class TestImagedataToCoverageInput:
     def test_bands_kwarg_wrong_length_raises(self) -> None:
         """A bands list of the wrong length fails GridInput validation."""
         with pytest.raises(ValueError, match="does not match"):
-            imagedata_to_coverage_input(make_image(), bands=[BandInfo("a")])
+            imagedata_to_grid_input(make_image(), bands=[BandInfo("a")])
 
     def test_missing_crs_raises(self) -> None:
         """An image without a CRS is rejected."""
         with pytest.raises(ValueError, match="no CRS"):
-            imagedata_to_coverage_input(make_image(crs=None))
+            imagedata_to_grid_input(make_image(crs=None))
 
     def test_crs_kwarg_overrides(self) -> None:
         """An explicit crs= kwarg wins over (or substitutes for) img.crs."""
         wgs84 = rasterio.CRS.from_epsg(4326)
 
-        assert imagedata_to_coverage_input(make_image(crs=None), crs=wgs84).crs == wgs84
-        assert imagedata_to_coverage_input(make_image(), crs=wgs84).crs == wgs84
+        assert imagedata_to_grid_input(make_image(crs=None), crs=wgs84).crs == wgs84
+        assert imagedata_to_grid_input(make_image(), crs=wgs84).crs == wgs84
 
     def test_missing_bounds_raises(self) -> None:
         """An image without bounds is rejected."""
         with pytest.raises(ValueError, match="no bounds"):
-            imagedata_to_coverage_input(make_image(bounds=None))
+            imagedata_to_grid_input(make_image(bounds=None))
 
     def test_passthrough_provenance_fields(self) -> None:
         """collection_id and item_ids carry over to the GridInput."""
-        cov = imagedata_to_coverage_input(
+        cov = imagedata_to_grid_input(
             make_image(),
             collection_id="my-collection",
             item_ids=["item-1", "item-2"],
@@ -409,7 +427,7 @@ class TestBandInfoFromReaderInfo:
 
     def test_composes_with_imagedata_converter(self) -> None:
         """bands=band_info_from_reader_info(info) works end-to-end."""
-        cov = imagedata_to_coverage_input(
+        cov = imagedata_to_grid_input(
             make_image(), bands=band_info_from_reader_info(self.make_info())
         )
 
@@ -522,7 +540,7 @@ class TestPointdataToCoverageInput:
     def test_basic_conversion(self) -> None:
         """Array (unchanged, no reshape), position, CRS, names, and dtype carry over."""
         point = make_point()
-        cov = pointdata_to_coverage_input(point, position=POSITION)
+        cov = pointdata_to_point_input(point, position=POSITION)
 
         assert cov.data is point.array
         assert cov.data.shape == (2,)
@@ -536,7 +554,7 @@ class TestPointdataToCoverageInput:
         arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.MaskedArray(
             np.ones(2, dtype="float32"), mask=[True, False]
         )
-        cov = pointdata_to_coverage_input(make_point(arr), position=POSITION)
+        cov = pointdata_to_point_input(make_point(arr), position=POSITION)
         cov_mask = np.ma.getmaskarray(cov.data)
 
         assert cov_mask[0]
@@ -546,22 +564,22 @@ class TestPointdataToCoverageInput:
     def test_bands_kwarg_applied(self) -> None:
         """An explicit bands sequence is stored as a tuple, entries unchanged."""
         bands = [BandInfo("a", description="alpha"), BandInfo("b", unit="m")]
-        cov = pointdata_to_coverage_input(make_point(), position=POSITION, bands=bands)
+        cov = pointdata_to_point_input(make_point(), position=POSITION, bands=bands)
 
         assert cov.bands == tuple(bands)
 
     def test_missing_crs_raises(self) -> None:
         """A point without a CRS is rejected."""
         with pytest.raises(ValueError, match="no CRS"):
-            pointdata_to_coverage_input(make_point(crs=None), position=POSITION)
+            pointdata_to_point_input(make_point(crs=None), position=POSITION)
 
     def test_crs_kwarg_overrides(self) -> None:
         """An explicit crs= kwarg wins over (or substitutes for) point.crs."""
         wgs84 = rasterio.CRS.from_epsg(4326)
-        substituted = pointdata_to_coverage_input(
+        substituted = pointdata_to_point_input(
             make_point(crs=None), position=POSITION, crs=wgs84
         )
-        overridden = pointdata_to_coverage_input(
+        overridden = pointdata_to_point_input(
             make_point(), position=POSITION, crs=wgs84
         )
 
@@ -576,7 +594,224 @@ class TestPointdataToCoverageInput:
         override must be honored instead.
         """
         empty = rasterio.CRS()
-        cov = pointdata_to_coverage_input(make_point(), position=POSITION, crs=empty)
+        cov = pointdata_to_point_input(make_point(), position=POSITION, crs=empty)
 
         assert cov.crs == empty
         assert cov.crs != CRS_EPSG_3857
+
+
+class TestPolygon:
+    """Test the Polygon geometry value type."""
+
+    def test_minimal_construction(self) -> None:
+        """A single closed exterior ring is sufficient (no holes)."""
+        poly = Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),))
+
+        assert len(poly.rings) == 1
+        assert poly.rings[0][0] == (0.0, 0.0)
+
+    def test_with_hole(self) -> None:
+        """An exterior ring plus one interior ring (hole) is carried."""
+        exterior = ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0))
+        hole = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0))
+        poly = Polygon(rings=(exterior, hole))
+
+        assert len(poly.rings) == 2
+
+    def test_empty_rings_raises(self) -> None:
+        """A polygon must have at least an exterior ring."""
+        with pytest.raises(ValueError, match="at least one ring"):
+            Polygon(rings=())
+
+    def test_too_few_vertices_raises(self) -> None:
+        """A ring needs at least four vertices (a closed triangle)."""
+        with pytest.raises(ValueError, match="at least four vertices"):
+            Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (0.0, 0.0)),))
+
+    def test_unclosed_ring_raises(self) -> None:
+        """A ring whose first and last vertices differ is rejected."""
+        with pytest.raises(ValueError, match="closed"):
+            Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),))
+
+    @pytest.mark.parametrize(
+        "bad", [float("nan"), float("inf"), float("-inf")], ids=("nan", "inf", "-inf")
+    )
+    def test_non_finite_vertex_raises(self, bad: float) -> None:
+        """A NaN or infinite vertex coordinate is rejected at construction."""
+        with pytest.raises(ValueError, match="must be finite"):
+            Polygon(rings=(((0.0, 0.0), (bad, 0.0), (1.0, 1.0), (0.0, 0.0)),))
+
+    def test_bounds(self) -> None:
+        """bounds is the (minx, miny, maxx, maxy) box of the exterior ring."""
+        # An asymmetric extent (x 1..7, y 2..3) so an x/y swap would be caught.
+        poly = Polygon(
+            rings=(((1.0, 2.0), (7.0, 2.0), (7.0, 3.0), (1.0, 3.0), (1.0, 2.0)),)
+        )
+
+        assert poly.bounds == (1.0, 2.0, 7.0, 3.0)
+
+    def test_bounds_contained_hole_does_not_extend(self) -> None:
+        """A hole inside the exterior leaves the bounding box unchanged."""
+        exterior = ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0))
+        hole = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0))
+
+        assert Polygon(rings=(exterior, hole)).bounds == (0.0, 0.0, 4.0, 4.0)
+
+    def test_bounds_spans_all_rings(self) -> None:
+        """bounds spans every ring, so a hole reaching past the exterior widens it.
+
+        A hole normally sits inside the exterior, but construction is permissive
+        and does not enforce containment. The read a polygon drives (rio-tiler's
+        feature) bounds all rings, so bounds must too: an interior ring extending
+        beyond the exterior widens the box rather than hiding behind it.
+        """
+        exterior = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0))
+        beyond = ((-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0), (-5.0, -5.0))
+
+        assert Polygon(rings=(exterior, beyond)).bounds == (-5.0, -5.0, 5.0, 5.0)
+
+    def test_frozen(self) -> None:
+        """Polygon is immutable."""
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            SQUARE.rings = ()  # type: ignore[misc]
+
+
+class TestPolygonInput:
+    """Test the PolygonInput dataclass."""
+
+    def test_minimal_construction(self) -> None:
+        """A 1-D masked array with a geometry and CRS is sufficient."""
+        cov = polygon_input(np.ma.MaskedArray(np.zeros(2)))
+
+        # bands is resolved at construction, so it is never empty afterwards.
+        assert [band.name for band in cov.bands] == ["b1", "b2"]
+        assert cov.geometry == SQUARE
+        assert cov.collection_id is None
+        assert cov.item_ids is None
+
+    @pytest.mark.parametrize(
+        "shape",
+        [(2, 1), (2, 3), (2, 1, 1), ()],
+        ids=("2D-column", "2D", "3D", "0D"),
+    )
+    def test_non_1d_data_raises(self, shape: tuple[int, ...]) -> None:
+        """PolygonInput requires 1-D (bands,) data: one reduced scalar per band."""
+        with pytest.raises(ValueError, match="Polygon data must have shape"):
+            polygon_input(np.ma.MaskedArray(np.zeros(shape)))
+
+    def test_band_count_mismatch_raises(self) -> None:
+        """A non-empty bands tuple must match data.shape[0]."""
+        with pytest.raises(ValueError, match="does not match"):
+            PolygonInput(
+                data=np.ma.MaskedArray(np.zeros(2)),
+                geometry=SQUARE,
+                crs=CRS_EPSG_3857,
+                bands=(BandInfo("b1"),),
+            )
+
+    def test_frozen(self) -> None:
+        """PolygonInput is immutable."""
+        cov = polygon_input(np.ma.MaskedArray(np.zeros(2)))
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cov.data = np.ma.MaskedArray(np.zeros(2))  # type: ignore[misc]
+
+
+class TestImagedataToPolygonInput:
+    """Test the reduce-and-convert path from a clipped ImageData."""
+
+    def test_reduces_to_one_scalar_per_band(self) -> None:
+        """Each band's valid pixels reduce to a single scalar (mean here)."""
+        img = make_image(np.arange(32, dtype="float32").reshape(2, 4, 4))
+        cov = imagedata_to_polygon_input(img, geometry=SQUARE, stat=Stat.MEAN)
+
+        assert cov.data.shape == (2,)
+        # band 0 is 0..15 (mean 7.5); band 1 is 16..31 (mean 23.5)
+        assert cov.data.tolist() == [7.5, 23.5]
+        assert cov.geometry == SQUARE
+        assert cov.crs == CRS_EPSG_3857
+
+    def test_band_dtype_follows_reduced_not_source(self) -> None:
+        """The range dtype comes from the reduced array, not the source raster.
+
+        A ``mean`` over an int16 raster is float, so the band dtype (which drives
+        the CoverageJSON range value type) must be float, not the source int16.
+        """
+        img = make_image(np.arange(8, dtype="int16").reshape(2, 2, 2))
+        cov = imagedata_to_polygon_input(img, geometry=SQUARE, stat=Stat.MEAN)
+
+        assert all(np.dtype(band.dtype).kind == "f" for band in cov.bands)
+        assert cov.data.dtype == np.dtype(cov.bands[0].dtype)
+
+    def test_count_yields_integer_band_dtype(self) -> None:
+        """A ``count`` reduction yields an integer range even over a float raster."""
+        img = make_image(np.ones((2, 4, 4), dtype="float32"))
+        cov = imagedata_to_polygon_input(img, geometry=SQUARE, stat=Stat.COUNT)
+
+        assert all(np.dtype(band.dtype).kind == "i" for band in cov.bands)
+
+    def test_all_masked_band_reduces_to_masked_scalar(self) -> None:
+        """A band with no valid pixels becomes a masked scalar (serializes null)."""
+        arr = np.ma.MaskedArray(
+            np.ones((2, 4, 4), dtype="float32"),
+            mask=np.repeat([[False], [True]], 16).reshape(2, 4, 4),
+        )
+        cov = imagedata_to_polygon_input(
+            make_image(arr), geometry=SQUARE, stat=Stat.MEAN
+        )
+
+        assert not np.ma.getmaskarray(cov.data)[0]
+        assert np.ma.getmaskarray(cov.data)[1]
+
+    def test_bands_kwarg_supplies_names_and_units(self) -> None:
+        """Explicit bands supply names/units, but dtype is taken from the reduction."""
+        img = make_image(np.arange(8, dtype="int16").reshape(2, 2, 2))
+        bands = [BandInfo("red", unit="K"), BandInfo("nir", unit="K")]
+        cov = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.MEAN, bands=bands
+        )
+
+        assert [band.name for band in cov.bands] == ["red", "nir"]
+        assert [band.unit for band in cov.bands] == ["K", "K"]
+        # names/units kept, but the int16 declared dtype is replaced by the mean's float
+        assert all(np.dtype(band.dtype).kind == "f" for band in cov.bands)
+
+    def test_bands_describe_the_reduction(self) -> None:
+        """Each band's description names the reduction; count drops the unit.
+
+        The stat shapes the output metadata, not just the value: a
+        unit-preserving reduction keeps the source unit and prefixes the
+        description ("mean of precipitation"); count is a dimensionless valid
+        pixel count, so it drops the unit.
+        """
+        img = make_image(np.arange(4, dtype="float32").reshape(1, 2, 2))
+        band = BandInfo("b1", description="precipitation", unit="mm")
+
+        mean = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.MEAN, bands=[band]
+        )
+        assert mean.bands[0].description == "mean of precipitation"
+        assert mean.bands[0].unit == "mm"
+
+        count = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.COUNT, bands=[band]
+        )
+        assert count.bands[0].description == "valid pixel count of precipitation"
+        assert count.bands[0].unit == ""
+
+    def test_reduction_description_falls_back_to_band_name(self) -> None:
+        """With no band description, the reduction is named over the band name."""
+        img = make_image(np.zeros((1, 2, 2), dtype="float32"))
+
+        cov = imagedata_to_polygon_input(
+            img, geometry=SQUARE, stat=Stat.MEAN, bands=[BandInfo("b1")]
+        )
+
+        assert cov.bands[0].description == "mean of b1"
+
+    def test_missing_crs_raises(self) -> None:
+        """An image without a CRS is rejected."""
+        with pytest.raises(ValueError, match="no CRS"):
+            imagedata_to_polygon_input(
+                make_image(crs=None), geometry=SQUARE, stat=Stat.MEAN
+            )

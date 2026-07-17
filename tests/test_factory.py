@@ -11,11 +11,13 @@ from titiler.core.errors import BadRequestError
 
 from titiler_covjson.factory import (
     CovJSONFactory,
+    _output_grid_dimensions,
     _parse_point_wkt,
+    _parse_polygon_wkt,
     _resolve_grid_dimensions,
     _resolve_read_bands,
 )
-from titiler_covjson.input import Position
+from titiler_covjson.input import Polygon, Position
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
 
 
@@ -542,6 +544,37 @@ def test_resolve_grid_dimensions_matches_rio_tiler(
     assert predicted == (image.width, image.height)
 
 
+def test_output_grid_dimensions_does_not_reject_subpixel(cog_path: str) -> None:
+    # _output_grid_dimensions only computes the dimensions rio-tiler will read;
+    # unlike _resolve_grid_dimensions it does NOT reject a sub-pixel-thin box.
+    # The /area read is permissive: a tiny polygon reads a tiny window (feature()
+    # rounds up to 1x1), so the ceiling helper must not raise on a thin box.
+    crs4326 = rasterio.CRS.from_epsg(4326)
+    thin = (-0.001, -0.001, 0.001, 0.001)  # far thinner than one source pixel
+
+    with Reader(cog_path) as src:
+        with pytest.raises(BadRequestError, match="too thin"):
+            _resolve_grid_dimensions(
+                src.dataset,
+                thin,
+                read_crs=crs4326,
+                width=None,
+                height=None,
+                max_size=None,
+            )
+
+        dims = _output_grid_dimensions(
+            src.dataset,
+            thin,
+            read_crs=crs4326,
+            width=None,
+            height=None,
+            max_size=None,
+        )
+
+    assert dims == (0, 0)
+
+
 def test_bbox_rejects_oversized_output_grid(
     small_ceiling_client: TestClient, cog_path: str
 ) -> None:
@@ -685,6 +718,99 @@ def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
 def test_parse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
     with pytest.raises(BadRequestError, match="Invalid position"):
         _parse_point_wkt(wkt)
+
+
+@pytest.mark.parametrize(
+    ("wkt", "expected"),
+    [
+        (
+            "POLYGON((0 0, 1 0, 1 1, 0 0))",
+            (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),),
+        ),
+        (
+            "polygon((0 0,1 0,1 1,0 0))",
+            (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),),
+        ),
+        (
+            "  POLYGON (( 0 0, 1 0, 1 1, 0 0 )) ",
+            (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),),
+        ),
+        (
+            "POLYGON((-1e1 -2.5, 1 0, 1 1, -1e1 -2.5))",
+            (((-10.0, -2.5), (1.0, 0.0), (1.0, 1.0), (-10.0, -2.5)),),
+        ),
+    ],
+    ids=["canonical", "lowercase-no-space", "whitespace", "decimals-exp-signs"],
+)
+def test_parse_polygon_wkt_accepts_single_ring(
+    wkt: str, expected: tuple[tuple[tuple[float, float], ...], ...]
+) -> None:
+    assert _parse_polygon_wkt(wkt) == Polygon(rings=expected)
+
+
+def test_parse_polygon_wkt_accepts_holes() -> None:
+    # An exterior ring plus one interior ring (hole) yields two rings.
+    wkt = "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 2, 1 1))"
+    polygon = _parse_polygon_wkt(wkt)
+
+    assert len(polygon.rings) == 2
+    assert polygon.rings[1] == (
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (2.0, 2.0),
+        (1.0, 2.0),
+        (1.0, 1.0),
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))",
+        "POLYGON M ((0 0 1, 1 0 1, 1 1 1, 0 0 1))",
+        "POLYGON ZM ((0 0 1 1, 1 0 1 1, 1 1 1 1, 0 0 1 1))",
+        "POLYGON((0 0 5, 1 0 5, 1 1 5, 0 0 5))",
+    ],
+    ids=["Z-tag", "M-tag", "ZM-tag", "3-token-vertex"],
+)
+def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
+    # A 3-D/measured polygon is rejected: the 2-D raster cannot sample a level.
+    with pytest.raises(BadRequestError, match="not supported"):
+        _parse_polygon_wkt(wkt)
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "not-wkt",
+        "",
+        "POLYGON EMPTY",
+        "POLYGON(())",
+        "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 0)))",
+        "LINESTRING(0 0, 1 1)",
+        "POLYGON((0 0, 1 0, 1 1, 0 1))",
+        "POLYGON((0 0, 1 0, 0 0))",
+        "POLYGON((nan 0, 1 0, 1 1, nan 0))",
+        "POLYGON((1 inf, 1 0, 1 1, 1 inf))",
+        "POLYGON((0 0, x 0, 1 1, 0 0))",
+    ],
+    ids=[
+        "garbage",
+        "blank",
+        "empty-geom",
+        "empty-ring",
+        "multipolygon",
+        "linestring",
+        "unclosed-ring",
+        "too-few-vertices",
+        "nan",
+        "inf",
+        "non-numeric",
+    ],
+)
+def test_parse_polygon_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
+    with pytest.raises(BadRequestError, match="Invalid polygon"):
+        _parse_polygon_wkt(wkt)
 
 
 @pytest.mark.parametrize("kind", ["image", "point"], ids=["ImageData", "PointData"])
@@ -951,4 +1077,352 @@ def test_position_requires_coords(client: TestClient, cog_path: str) -> None:
 
 def test_position_requires_url(client: TestClient) -> None:
     response = client.get("/position", params={"coords": "POINT(0 0)"})
+    assert response.status_code == 422, response.text
+
+
+# --- /area endpoint --------------------------------------------------------
+
+_FULL_EXTENT_POLYGON = "POLYGON((-10 -5, 10 -5, 10 5, -10 5, -10 -5))"
+
+
+def test_area_returns_schema_valid_polygon_coverage(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A polygon over the whole 2x2 extent reduces each band to one scalar: band 1
+    # (red) mean of 0,1,2,3 = 1.5; band 2 (nir) mean of its unmasked 1,2,3 = 2.0
+    # (its top-left pixel is nodata). Asserts the Polygon domain shape end to end.
+    response = client.get(
+        "/area", params={"url": tiny_cog_path, "coords": _FULL_EXTENT_POLYGON}
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(COVJSON_MEDIA_TYPE)
+    assert response.headers["content-crs"] == (
+        "<http://www.opengis.net/def/crs/OGC/1.3/CRS84>"
+    )
+
+    body = response.json()
+    validate_covjson(body)
+
+    assert body["domain"]["domainType"] == "Polygon"
+    composite = body["domain"]["axes"]["composite"]
+    assert composite["dataType"] == "polygon"
+    assert composite["coordinates"] == ["x", "y"]
+    assert composite["values"] == [
+        [[[-10.0, -5.0], [10.0, -5.0], [10.0, 5.0], [-10.0, 5.0], [-10.0, -5.0]]]
+    ]
+    assert body["ranges"]["b1"]["axisNames"] == []
+    assert body["ranges"]["b1"]["shape"] == []
+    assert body["ranges"]["b1"]["values"] == [1.5]
+    assert body["ranges"]["b2"]["values"] == [2.0]
+
+
+@pytest.mark.parametrize(
+    ("stat", "expected"),
+    [
+        ("mean", 1.5),
+        ("min", 0.0),
+        ("max", 3.0),
+        ("median", 1.5),
+        ("sum", 6.0),
+    ],
+    ids=["mean", "min", "max", "median", "sum"],
+)
+def test_area_stat_selects_reduction(
+    client: TestClient, tiny_cog_path: str, stat: str, expected: float
+) -> None:
+    # Each statistic reduces band 1's four pixels (0, 1, 2, 3) to its scalar.
+    response = client.get(
+        "/area",
+        params={
+            "url": tiny_cog_path,
+            "coords": _FULL_EXTENT_POLYGON,
+            "bidx": 1,
+            "stat": stat,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b1"]["values"] == [expected]
+
+
+def test_area_empty_stat_defaults_to_mean(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A blank `stat` (?stat=) is treated as absent and defaults to the mean (band
+    # 1's pixels 0, 1, 2, 3 -> 1.5), not rejected with a 400 for an empty value.
+    response = client.get(
+        "/area",
+        params={
+            "url": tiny_cog_path,
+            "coords": _FULL_EXTENT_POLYGON,
+            "bidx": 1,
+            "stat": "",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b1"]["values"] == [1.5]
+
+
+def test_area_count_yields_integer_range(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # count reports the number of valid pixels: band 2's top-left pixel is nodata,
+    # so three of its four pixels are valid.
+    response = client.get(
+        "/area",
+        params={
+            "url": tiny_cog_path,
+            "coords": _FULL_EXTENT_POLYGON,
+            "bidx": 2,
+            "stat": "count",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ranges"]["b2"]["dataType"] == "integer"
+    assert body["ranges"]["b2"]["values"] == [3]
+
+
+def test_area_parameter_records_the_reduction(
+    client: TestClient, unit_tagged_cog_path: str
+) -> None:
+    # The coverage self-describes the reduction: the parameter label names the
+    # stat, and count (a dimensionless pixel count) drops the source unit while a
+    # unit-preserving stat keeps it. (unit_tagged_cog band 1 is "red", in mm.)
+    mean = client.get(
+        "/area",
+        params={"url": unit_tagged_cog_path, "coords": _FULL_EXTENT_POLYGON, "bidx": 1},
+    )
+    assert mean.status_code == 200, mean.text
+    param = mean.json()["parameters"]["b1"]
+    assert param["observedProperty"]["label"] == {"en": "mean of red"}
+    assert param["unit"]["symbol"]["value"] == "mm"
+
+    count = client.get(
+        "/area",
+        params={
+            "url": unit_tagged_cog_path,
+            "coords": _FULL_EXTENT_POLYGON,
+            "bidx": 1,
+            "stat": "count",
+        },
+    )
+    assert count.status_code == 200, count.text
+    count_param = count.json()["parameters"]["b1"]
+    assert count_param["observedProperty"]["label"] == {
+        "en": "valid pixel count of red"
+    }
+    assert "unit" not in count_param
+
+
+def test_area_honors_holes(client: TestClient, tiny_cog_path: str) -> None:
+    # A polygon with an interior ring round-trips through the endpoint: the
+    # composite value carries both rings. (Hole parsing and modeling are
+    # unit-tested; this confirms the end-to-end wiring.)
+    coords = (
+        "POLYGON((-10 -5, 10 -5, 10 5, -10 5, -10 -5),(-1 -1, 1 -1, 1 1, -1 1, -1 -1))"
+    )
+    response = client.get("/area", params={"url": tiny_cog_path, "coords": coords})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    validate_covjson(body)
+    assert len(body["domain"]["axes"]["composite"]["values"][0]) == 2
+
+
+def test_area_out_of_bounds_polygon_returns_null(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A polygon fully outside the dataset selects no valid pixels; rather than a
+    # 400, the reduction is null (Reader.feature returns an all-masked array).
+    coords = "POLYGON((100 100, 101 100, 101 101, 100 101, 100 100))"
+    response = client.get(
+        "/area", params={"url": tiny_cog_path, "coords": coords, "bidx": 1}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b1"]["values"] == [None]
+
+
+def test_area_all_nodata_polygon_returns_null(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A polygon inside the dataset but covering only nodata reduces to null. Here
+    # nodata=0 masks band 1's top-left pixel (value 0), and the polygon sits
+    # wholly within that cell (x in [-10, 0], y in [0, 5]).
+    coords = "POLYGON((-9 1, -1 1, -1 4, -9 4, -9 1))"
+    response = client.get(
+        "/area",
+        params={"url": tiny_cog_path, "coords": coords, "bidx": 1, "nodata": 0},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b1"]["values"] == [None]
+
+
+@pytest.mark.parametrize(
+    "coords",
+    [
+        "POLYGON((5 5, 5 5, 5 5, 5 5))",
+        "POLYGON((-10 0, 10 0, 5 0, -10 0))",
+        "POLYGON((0 -5, 0 5, 0 0, 0 -5))",
+    ],
+    ids=["single-point", "horizontal-line", "vertical-line"],
+)
+def test_area_rejects_degenerate_polygon(
+    client: TestClient, tiny_cog_path: str, coords: str
+) -> None:
+    # A polygon whose bounding box has zero width or height cannot be sampled
+    # (rio-tiler's feature() raises "Cannot invert geotransform"), so it is
+    # rejected with a 400 up front rather than surfacing as an opaque 500.
+    response = client.get("/area", params={"url": tiny_cog_path, "coords": coords})
+    assert response.status_code == 400, response.text
+    assert "degenerate" in response.json()["detail"]
+
+
+def test_area_degenerate_polygon_rejected_before_read(client: TestClient) -> None:
+    # Degeneracy is a pure geometric property of the polygon, so it is checked
+    # before the dataset is opened: a degenerate polygon with an unreadable url is
+    # a 400 (degenerate), not a 500 from the dataset open. (/bbox rejects a
+    # degenerate box pre-I/O the same way.)
+    response = client.get(
+        "/area",
+        params={"url": "/no/such/file.tif", "coords": "POLYGON((5 5, 5 5, 5 5, 5 5))"},
+    )
+    assert response.status_code == 400, response.text
+    assert "degenerate" in response.json()["detail"]
+
+
+def test_area_degenerate_exterior_with_sampleable_hole_is_served(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # The degeneracy guard measures the box spanning ALL rings (what feature()
+    # reads), not the exterior alone. A zero-area exterior paired with an interior
+    # ring that has area still bounds a sampleable read, so it is served (200),
+    # not rejected as degenerate. Only a geometry degenerate across every ring
+    # yields an unsampleable read and a 400.
+    coords = "POLYGON((0 -5, 0 5, 0 0, 0 -5), (-3 -3, 3 -3, 3 3, -3 3, -3 -3))"
+    response = client.get("/area", params={"url": tiny_cog_path, "coords": coords})
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]
+
+
+def test_area_reprojected_read_bounded_on_destination_grid(
+    client: TestClient, cog_path: str
+) -> None:
+    # A projected-CRS read is produced on the DESTINATION grid. Over a
+    # low-latitude source, an extreme-y Web Mercator polygon reprojects to a
+    # destination grid of ~163M cells while its source-grid footprint is only
+    # ~83k, so a source-grid ceiling would pass it and feature() would allocate
+    # multiple GB. The ceiling must measure the destination grid feature() will
+    # produce and reject the read before it allocates.
+    coords = (
+        "POLYGON((-500000 -1e12, 500000 -1e12, 500000 1e12, -500000 1e12, "
+        "-500000 -1e12))"
+    )
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": coords, "crs": "EPSG:3857"},
+    )
+    assert response.status_code == 400, response.text
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_reprojected_hole_beyond_exterior_bounded_before_read(
+    client: TestClient, cog_path: str
+) -> None:
+    # The reproject dest-grid ceiling and the all-rings bound compose: a tiny
+    # exterior with an interior ring (hole) at extreme Web Mercator latitude
+    # reprojects to a destination grid of hundreds of millions of cells. Because
+    # the ceiling measures the box spanning ALL rings on that destination grid, it
+    # rejects before allocation ("Requested"), closing the bypass where a small
+    # exterior would smuggle an enormous reprojected read past the guard.
+    coords = (
+        "POLYGON((0 0, 1000 0, 1000 1000, 0 1000, 0 0), "
+        "(-500000 -1e12, 500000 -1e12, 500000 1e12, -500000 1e12, -500000 -1e12))"
+    )
+    response = client.get(
+        "/area", params={"url": cog_path, "coords": coords, "crs": "EPSG:3857"}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_rejects_oversized_polygon(
+    small_ceiling_client: TestClient, cog_path: str
+) -> None:
+    # The read is bounded before allocation: a polygon whose bounding box exceeds
+    # the cell-count ceiling (here 16) is rejected. The 16x16 source's full extent
+    # is 256 cells.
+    response = small_ceiling_client.get(
+        "/area", params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON}
+    )
+    assert response.status_code == 400, response.text
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_hole_beyond_exterior_bounded_before_read(
+    small_ceiling_client: TestClient, cog_path: str
+) -> None:
+    # rio-tiler's feature() bounds ALL rings, so a permissively-accepted interior
+    # ring (hole) reaching past a tiny exterior sizes the read to the hole, not
+    # the exterior. The pre-read ceiling must measure that same all-rings extent
+    # and reject before allocation ("Requested"): an exterior-only measure passes
+    # the tiny exterior and lets feature() allocate the full read first, tripping
+    # only the post-read "Output" backstop (the DoS the pre-read guard closes).
+    coords = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0), (-10 -5, 10 -5, 10 5, -10 5, -10 -5))"
+    response = small_ceiling_client.get(
+        "/area", params={"url": cog_path, "coords": coords}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_rejects_malformed_coords(client: TestClient, cog_path: str) -> None:
+    # _parse_polygon_wkt rejections are exhaustively unit-tested; one case here
+    # confirms the route wiring turns them into a 400.
+    response = client.get("/area", params={"url": cog_path, "coords": "not-wkt"})
+    assert response.status_code == 400, response.text
+
+
+def test_area_rejects_vertical_polygon(client: TestClient, cog_path: str) -> None:
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": "POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))"},
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_area_rejects_unknown_stat(client: TestClient, cog_path: str) -> None:
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON, "stat": "bogus"},
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_area_rejects_out_of_range_band(client: TestClient, cog_path: str) -> None:
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON, "bidx": 5},
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_area_rejects_vertical_z_param(client: TestClient, cog_path: str) -> None:
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON, "z": "850"},
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_area_rejects_unsupported_format(client: TestClient, cog_path: str) -> None:
+    response = client.get(
+        "/area",
+        params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON, "f": "png"},
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_area_requires_coords(client: TestClient, cog_path: str) -> None:
+    response = client.get("/area", params={"url": cog_path})
     assert response.status_code == 422, response.text

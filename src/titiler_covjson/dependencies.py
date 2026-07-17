@@ -14,7 +14,12 @@ from typing import Annotated, Any
 from fastapi import Query
 from titiler.core.errors import BadRequestError
 
+from titiler_covjson.reduce import Stat
+
 _BAND_NAME = re.compile(r"^b(?P<idx>[1-9][0-9]*)$")
+
+# The default zonal-reduction statistic, applied when `stat` is absent or blank.
+_DEFAULT_STAT = "mean"
 
 
 @dataclass
@@ -263,6 +268,61 @@ def reject_vertical_selection(
             "parameter."
         )
         raise BadRequestError(msg)
+
+
+def area_stat(
+    stat: Annotated[
+        str,
+        Query(
+            description=(
+                "Zonal reduction statistic over the polygon: one of min, max, "
+                "mean, median, std, sum, count. Defaults to mean. `std` is the "
+                "population standard deviation (normalized by N), not the sample "
+                "standard deviation (N-1): the polygon's pixels are taken to be "
+                "the whole population being described, not a sample drawn from a "
+                "larger one."
+            ),
+        ),
+    ] = _DEFAULT_STAT,
+) -> Stat:
+    """Parse and validate the ``stat`` zonal-reduction selector for ``/area``.
+
+    Resolves the ``stat`` query value to a :class:`~titiler_covjson.reduce.Stat`
+    member (case-insensitively), defaulting to the mean when absent or blank (a
+    blank ``?stat=`` is treated as absent, matching the other selector guards). An
+    unrecognized value is rejected with ``BadRequestError`` (a 400, consistent
+    with the other selector guards) rather than FastAPI's native 422 for an
+    invalid enum.
+
+    Args:
+        stat: The requested statistic name, defaulting to ``"mean"``.
+
+    Returns:
+        Stat: The resolved reduction statistic.
+
+    Raises:
+        BadRequestError: If ``stat`` is not a recognized statistic. The host
+            application's titiler exception handlers render this as a 400
+            response.
+
+    Examples:
+        >>> area_stat().value
+        'mean'
+        >>> area_stat("").value
+        'mean'
+        >>> area_stat("MEDIAN").value
+        'median'
+        >>> area_stat("bogus")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Unsupported stat 'bogus': ...
+    """
+    try:
+        return Stat(stat.casefold() or _DEFAULT_STAT)
+    except ValueError:
+        allowed = ", ".join(member.value for member in Stat)
+        msg = f"Unsupported stat {stat!r}: expected one of {allowed}."
+        raise BadRequestError(msg) from None
 
 
 def _band_name_to_index(name: str) -> int:

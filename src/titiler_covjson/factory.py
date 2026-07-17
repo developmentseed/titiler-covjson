@@ -1,12 +1,13 @@
 """CoverageJSON factory: a titiler.core BaseFactory subclass owning the routes.
 
-Serves a single dataset as CoverageJSON over two routes: a 2-D Grid coverage for
-a bounding box (``GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}``) and a Point
-coverage for a single position (``GET {prefix}/position?coords=POINT(x y)``),
-reusing titiler's dependency-injectors for the dataset path, band selection,
-dataset options, and (for the bounding box) output sizing. It reads with
-rio-tiler and funnels the result through the model layer to a CoverageJSON
-response.
+Serves a single dataset as CoverageJSON over three routes: a 2-D Grid coverage
+for a bounding box (``GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}``), a Point
+coverage for a single position (``GET {prefix}/position?coords=POINT(x y)``), and
+a Polygon coverage reducing an area to one value per band
+(``GET {prefix}/area?coords=POLYGON((...))``), reusing titiler's
+dependency-injectors for the dataset path, band selection, dataset options, and
+(for the bounding box) output sizing. It reads with rio-tiler and funnels the
+result through the model layer to a CoverageJSON response.
 
 Mount it with ``app.include_router(CovJSONFactory().router)``. The host
 application must also install titiler's exception handlers
@@ -29,6 +30,7 @@ from typing import Annotated, Any
 
 import rasterio
 from attrs import define
+from covjson_pydantic.coverage import Coverage
 from fastapi import Depends, Path, Query
 from rasterio import windows
 from rasterio.io import DatasetReader
@@ -50,6 +52,7 @@ from titiler.core.factory import BaseFactory
 
 from titiler_covjson.dependencies import (
     CovJSONBandParams,
+    area_stat,
     reject_vertical_selection,
     to_kwargs,
     validate_covjson_format,
@@ -59,12 +62,16 @@ from titiler_covjson.input import (
     BandInfo,
     GridInput,
     PointInput,
+    Polygon,
+    PolygonInput,
     Position,
     band_info_from_reader_info,
-    imagedata_to_coverage_input,
-    pointdata_to_coverage_input,
+    imagedata_to_grid_input,
+    imagedata_to_polygon_input,
+    pointdata_to_point_input,
 )
 from titiler_covjson.modeler import to_coverage
+from titiler_covjson.reduce import Stat
 from titiler_covjson.responses import CovJSONResponse
 
 DEFAULT_MAX_SIZE = 1024
@@ -83,20 +90,31 @@ _POINT_WKT = re.compile(
     re.IGNORECASE,
 )
 
+# WKT for a polygon: `POLYGON`, an optional Z/M/ZM tag, then the parenthesized
+# ring list `((x y, ...), (x y, ...))`. _parse_polygon_wkt inspects the tag and
+# splits the ring list with _POLYGON_RING (each parenthesized group is one ring);
+# MULTIPOLYGON fails this pattern (the leading `MULTI`), keeping a single polygon.
+_POLYGON_WKT = re.compile(
+    r"^\s*POLYGON\s*(?P<tag>Z|M|ZM)?\s*\((?P<rings>.*)\)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_POLYGON_RING = re.compile(r"\(([^()]*)\)")
+
 
 @define(kw_only=True)
 class CovJSONFactory(BaseFactory):
-    """Serve a single dataset as CoverageJSON over ``/bbox`` and ``/position``.
+    """Serve a single dataset as CoverageJSON over ``/bbox``, ``/position``, ``/area``.
 
     ``/bbox`` returns a Grid coverage for a bounding box; ``/position`` returns a
-    Point coverage for a single position. Collaborators are constructor fields
-    (the composition root): the reader and the titiler dependency-injectors for
-    path, band selection, dataset options, and output sizing. Two sizing knobs
-    are configurable (they bound the ``/bbox`` read; ``/position`` samples a
-    single cell and needs no sizing): ``default_max_size``, the longest output
-    dimension applied when no sizing is requested (a request still succeeds, just
-    coarser), and ``max_cells``, a hard ceiling on the output cell count that
-    rejects an oversized request.
+    Point coverage for a single position; ``/area`` returns a Polygon coverage
+    reducing the dataset over a polygon to one value per band. Collaborators are
+    constructor fields (the composition root): the reader and the titiler
+    dependency-injectors for path, band selection, dataset options, and output
+    sizing. Two sizing knobs are configurable: ``default_max_size``, the longest
+    output dimension applied when no sizing is requested on ``/bbox`` (a request
+    still succeeds, just coarser), and ``max_cells``, a hard ceiling on the read
+    cell count that bounds ``/bbox`` and ``/area`` (``/position`` samples a single
+    cell and needs neither).
     """
 
     reader: type[Reader] = Reader
@@ -128,7 +146,7 @@ class CovJSONFactory(BaseFactory):
         super().__attrs_post_init__()  # type: ignore[no-untyped-call]
 
     def register_routes(self) -> None:
-        """Register the ``/bbox`` and ``/position`` routes."""
+        """Register the ``/bbox``, ``/position``, and ``/area`` routes."""
 
         @self.router.get(
             "/bbox/{minx},{miny},{maxx},{maxy}",
@@ -174,13 +192,8 @@ class CovJSONFactory(BaseFactory):
             )
 
             grid_input = _build_grid_input(image, info, band_kwargs, label_crs)
-            coverage = to_coverage(grid_input)
-            headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
 
-            return CovJSONResponse(
-                content=coverage.model_dump_json(exclude_none=True),
-                headers=headers,
-            )
+            return _covjson_response(to_coverage(grid_input), label_crs)
 
         @self.router.get(
             "/position",
@@ -226,13 +239,88 @@ class CovJSONFactory(BaseFactory):
             point_input = _build_point_input(
                 point, info, band_kwargs, position, label_crs
             )
-            coverage = to_coverage(point_input)
-            headers = {"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"}
 
-            return CovJSONResponse(
-                content=coverage.model_dump_json(exclude_none=True),
-                headers=headers,
+            return _covjson_response(to_coverage(point_input), label_crs)
+
+        @self.router.get(
+            "/area",
+            response_class=CovJSONResponse,
+            operation_id=f"{self.operation_prefix}getCoverageForArea",
+            summary="Get a CoverageJSON Polygon coverage for an area",
+            description=(
+                "Reduce the dataset over the polygon `coords` (a WKT "
+                "`POLYGON((x y, ...))`) to a single value per band by `stat` "
+                "(default `mean`) and return a CoverageJSON Polygon coverage. The "
+                "reduction is an unweighted, all-touched pixel statistic: every "
+                "pixel the polygon boundary touches is included whole, at equal "
+                "weight, and none is weighted by the fraction of it the polygon "
+                "actually covers. Expect results to diverge from an area-weighted "
+                "zonal statistic where boundary pixels are a large share of the "
+                "polygon, i.e., for polygons only a few pixels across. By "
+                "default the polygon is interpreted in, and the output labeled "
+                "with, CRS84 (longitude/latitude); pass `crs` to override. A "
+                "polygon that selects no valid pixels (outside the dataset, or "
+                "all nodata) yields a `null` value rather than an error. Vertical "
+                "selection (a `z` level, or a 3-D `POLYGON Z`) is rejected: the "
+                "2-D raster backing has no vertical dimension to reduce over."
+            ),
+        )
+        def area_coverage(
+            coords: Annotated[
+                str,
+                Query(description="Area as WKT, e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."),
+            ],
+            src_path: Annotated[str, Depends(self.path_dependency)],
+            band_params: Annotated[CovJSONBandParams, Depends(self.band_dependency)],
+            dataset_params: Annotated[DatasetParams, Depends(self.dataset_dependency)],
+            crs: Annotated[rasterio.CRS | None, Depends(CRSParams)],
+            stat: Annotated[Stat, Depends(area_stat)],
+            _vertical: Annotated[None, Depends(reject_vertical_selection)],
+            _format: Annotated[None, Depends(validate_covjson_format)],
+        ) -> CovJSONResponse:
+            polygon = _parse_polygon_wkt(coords)
+            _reject_degenerate_polygon(polygon)
+            read_crs, label_crs = _resolve_crs(crs)
+            _validate_label_crs(label_crs)
+            band_kwargs = to_kwargs(band_params)
+
+            image, info = _read_polygon_image(
+                self.reader,
+                src_path,
+                polygon,
+                read_crs=read_crs,
+                band_kwargs=band_kwargs,
+                dataset_kwargs=to_kwargs(dataset_params),
+                max_cells=self.max_cells,
             )
+
+            polygon_input = _build_polygon_input(
+                image, info, band_kwargs, polygon, stat, label_crs
+            )
+
+            return _covjson_response(to_coverage(polygon_input), label_crs)
+
+
+def _covjson_response(coverage: Coverage, label_crs: rasterio.CRS) -> CovJSONResponse:
+    """Serialize a coverage to a ``CovJSONResponse`` with the ``Content-Crs`` header.
+
+    The shared response epilogue for every route: serialize with
+    ``exclude_none=True`` (the CoverageJSON schema rejects explicit ``null``
+    members, though ``null`` *elements* inside a range's ``values`` are kept) and
+    advertise the output CRS as an OGC Uniform Resource Identifier (URI) in the
+    ``Content-Crs`` response header.
+
+    Args:
+        coverage: The coverage to serialize.
+        label_crs: The output (label) CRS, for the ``Content-Crs`` header.
+
+    Returns:
+        CovJSONResponse: The serialized CoverageJSON response.
+    """
+    return CovJSONResponse(
+        content=coverage.model_dump_json(exclude_none=True),
+        headers={"Content-Crs": f"<{crs_to_ogc_uri(label_crs)}>"},
+    )
 
 
 def _read_bounded_image(
@@ -380,6 +468,102 @@ def _read_point(
     return point, info
 
 
+def _read_polygon_image(
+    reader: type[Reader],
+    src_path: str,
+    polygon: Polygon,
+    *,
+    read_crs: rasterio.CRS,
+    band_kwargs: dict[str, Any],
+    dataset_kwargs: dict[str, Any],
+    max_cells: int,
+) -> tuple[ImageData, Info]:
+    """Clip ``src_path`` to ``polygon``, returning the masked image and dataset info.
+
+    Opens ``src_path``, reads the polygon's bounding-box window at native
+    resolution, and applies the polygon as a cutline so pixels outside it (and
+    nodata pixels) are masked. Returns the clipped image alongside the reader's
+    dataset ``info``. A polygon outside the dataset does not raise: rio-tiler's
+    ``feature`` returns an all-masked array, which the caller reduces to ``null``.
+    An out-of-range band index, or a bounding box over the cell-count ceiling, is
+    rejected with ``BadRequestError`` by the guards this calls (rendered as a 400
+    by the host application's titiler exception handlers).
+
+    The read is bounded before allocation, since it is native-resolution (no
+    ``max_size``, so a downstream zonal statistic stays exact) and an enormous
+    polygon would otherwise allocate an enormous array. The bounding box is
+    measured on the destination grid ``feature`` will produce (via
+    :func:`_output_grid_dimensions`, the same dimensions the ``/bbox`` path vets),
+    so a reprojection that stretches the destination grid (Web Mercator near the
+    poles) far beyond the source window is bounded, not under-counted. This does
+    not reject a sub-pixel-thin polygon: a tiny polygon reads a tiny window and
+    reduces to ``null`` or a single value, which the empty-polygon contract
+    already allows. A degenerate (zero-area) polygon is rejected earlier, in the
+    route, before the dataset is opened.
+
+    Args:
+        reader: The rio-tiler reader type used to open ``src_path``.
+        src_path: The dataset path or URL.
+        polygon: The polygon to clip to, in ``read_crs``.
+        read_crs: The CRS the polygon is expressed in and the read reprojects to.
+        band_kwargs: Band-selection keyword arguments for ``feature`` (indexes or
+            expression).
+        dataset_kwargs: Dataset-read keyword arguments for ``feature`` (nodata,
+            unscale, resampling, reprojection).
+        max_cells: The hard cell-count ceiling.
+
+    Returns:
+        tuple[ImageData, Info]: The clipped image and the reader's dataset info.
+    """
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [[list(vertex) for vertex in ring] for ring in polygon.rings],
+    }
+
+    with reader(src_path) as src_dst:
+        info = src_dst.info()
+        _validate_band_indexes(band_kwargs.get("indexes"), info)
+
+        # Bound the read on the destination grid feature() will allocate (the same
+        # dimensions _resolve_grid_dimensions vets for /bbox), not a source-grid
+        # measure. `polygon.bounds` is non-degenerate: the route rejects a
+        # zero-extent polygon before the dataset is opened, so the dimension
+        # computation's aspect-ratio division is safe.
+        grid_width, grid_height = _output_grid_dimensions(
+            src_dst.dataset,
+            polygon.bounds,
+            read_crs=read_crs,
+            width=None,
+            height=None,
+            max_size=None,
+        )
+        _enforce_cell_ceiling(
+            grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
+        )
+
+        # feature() rasterizes the cutline with all_touched=True, hardcoded rather
+        # than exposed as a parameter, so every pixel the polygon boundary touches
+        # is masked in whole and the downstream reduction weights each equally.
+        # Area weighting would not require shapely, should we want it later:
+        # ImageData.get_coverage_array() returns a geometry's fractional per-cell
+        # coverage (rasterize at a subpixel scale, then aggregate), and
+        # ImageData.statistics() takes that array as its `coverage` argument. Both
+        # ship with rio-tiler and rest on rasterio.features, already a dependency.
+        image = src_dst.feature(
+            geometry,
+            shape_crs=read_crs,
+            dst_crs=read_crs,
+            **band_kwargs,
+            **dataset_kwargs,
+        )
+
+    _enforce_cell_ceiling(
+        image.width, image.height, max_cells=max_cells, grid_label="Output"
+    )
+
+    return image, info
+
+
 def _validate_bbox(minx: float, miny: float, maxx: float, maxy: float) -> None:
     """Reject a degenerate bounding box (each min must be strictly below its max).
 
@@ -491,6 +675,166 @@ def _parse_point_wkt(coords: str) -> Position:
         raise BadRequestError(msg) from None
 
 
+def _parse_polygon_wkt(coords: str) -> Polygon:
+    """Parse a 2-D WKT ``POLYGON((x y, ...), ...)`` into a :class:`Polygon`.
+
+    A hand-rolled parser, deliberately dependency-free like :func:`_parse_point_wkt`:
+    it splits the parenthesized ring list and reads each vertex as two floats,
+    handing the rings to :class:`Polygon`, which owns the ring invariants (closed,
+    at least four vertices, finite coordinates). Accepts a single 2-D ``POLYGON``
+    with one exterior ring and zero or more interior rings (holes); everything
+    else is rejected with ``BadRequestError``:
+
+    - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a vertex with
+      three or four coordinates): the 2-D raster backing has no vertical level to
+      reduce over, so echoing or dropping it would be dishonest (see
+      docs/adr/0001-covjson-http-api-direction.md);
+    - a non-POLYGON geometry (including ``MULTIPOLYGON``, whose ``MULTI`` prefix
+      fails the pattern), ``POLYGON EMPTY``, an empty ring, a non-finite or
+      non-numeric coordinate, an unclosed ring, a ring with fewer than four
+      vertices, or any other malformed input.
+
+    Args:
+        coords: The raw ``coords`` query value.
+
+    Returns:
+        Polygon: The parsed 2-D polygon.
+
+    Raises:
+        BadRequestError: If ``coords`` is not a valid 2-D WKT polygon. The host
+            application's titiler exception handlers render this as a 400
+            response.
+
+    Examples:
+        >>> _parse_polygon_wkt("POLYGON((0 0, 1 0, 1 1, 0 0))").rings
+        (((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)),)
+
+        A 3-D polygon is rejected (vertical selection is unsupported here):
+
+        >>> _parse_polygon_wkt("POLYGON Z ((0 0 1, 1 0 1, 1 1 1, 0 0 1))")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Vertical or measured coordinates ...
+
+        An unclosed ring is rejected:
+
+        >>> _parse_polygon_wkt("POLYGON((0 0, 1 0, 1 1, 0 1))")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Invalid polygon 'POLYGON((0 0, ...
+    """
+    if (match := _POLYGON_WKT.match(coords)) is None:
+        msg = (
+            f"Invalid polygon {coords!r}: expected WKT POLYGON((x y, x y, ...)), "
+            "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
+        )
+        raise BadRequestError(msg)
+
+    if match["tag"]:
+        msg = (
+            "Vertical or measured coordinates are not supported: this endpoint "
+            f"reduces a single 2-D raster. Provide a 2-D POLYGON; got {coords!r}."
+        )
+        raise BadRequestError(msg)
+
+    if not (ring_strings := _POLYGON_RING.findall(match["rings"])):
+        msg = (
+            f"Invalid polygon {coords!r}: expected at least one parenthesized ring, "
+            "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
+        )
+        raise BadRequestError(msg)
+
+    # _parse_ring rejects a non-2-D or non-numeric vertex and Polygon rejects a
+    # non-finite, unclosed, or too-short ring; one handler turns every ValueError
+    # into a 400. Polygon owns the ring invariants as the single source of truth
+    # (mirroring _parse_point_wkt delegating finiteness to Position).
+    try:
+        return Polygon(rings=tuple(map(_parse_ring, ring_strings)))
+    except ValueError as exc:
+        msg = f"Invalid polygon {coords!r}: {exc}"
+        raise BadRequestError(msg) from exc
+
+
+def _parse_ring(ring: str) -> tuple[tuple[float, float], ...]:
+    """Parse a WKT ring body (``x y, x y, ...``) into a tuple of ``(x, y)`` vertices.
+
+    Args:
+        ring: A single ring's comma-separated ``x y`` vertices (the text inside
+            one ring's parentheses).
+
+    Returns:
+        tuple[tuple[float, float], ...]: The parsed vertices, in order.
+
+    Raises:
+        ValueError: If a vertex is not a 2-D ``x y`` pair (including a 3-D or
+            measured vertex), or a coordinate is not a number. The caller turns
+            this into a ``BadRequestError``.
+    """
+    vertices: list[tuple[float, float]] = []
+
+    for pair in ring.split(","):
+        tokens = pair.split()
+
+        if len(tokens) in {3, 4}:
+            msg = (
+                "vertical or measured coordinates are not supported: each vertex "
+                f"must be a 2-D 'x y' pair; got {pair.strip()!r}."
+            )
+            raise ValueError(msg)
+
+        if len(tokens) != 2:
+            msg = f"each ring vertex must be an 'x y' pair; got {pair.strip()!r}."
+            raise ValueError(msg)
+
+        # float() rejects a non-numeric token; a non-finite one (NaN/infinity)
+        # parses here and is rejected by Polygon, as in _parse_point_wkt.
+        x, y = (float(token) for token in tokens)
+        vertices.append((x, y))
+
+    return tuple(vertices)
+
+
+def _reject_degenerate_polygon(polygon: Polygon) -> None:
+    """Reject a degenerate polygon (a point or an axis-aligned line) before I/O.
+
+    A polygon whose bounding box has zero width or height cannot bound an area to
+    reduce: rio-tiler's ``feature`` cannot sample it (it raises "Cannot invert
+    geotransform"). Degeneracy is a pure property of the geometry, so it is
+    checked in the route before the dataset is opened, mirroring
+    :func:`_validate_bbox` for the ``/bbox`` path (a sub-pixel but nonzero polygon
+    is not rejected: it reads as a tiny window).
+
+    Args:
+        polygon: The parsed request polygon.
+
+    Raises:
+        BadRequestError: If the polygon's bounding box has zero width or height.
+            The host application's titiler exception handlers render this as a 400
+            response.
+
+    Examples:
+        A polygon collapsed to a point (or an axis-aligned line) is rejected:
+
+        >>> from titiler_covjson.input import Polygon
+        >>> _reject_degenerate_polygon(
+        ...     Polygon(rings=(((5.0, 5.0), (5.0, 5.0), (5.0, 5.0), (5.0, 5.0)),))
+        ... )
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Polygon area is degenerate: its
+        bounding box has zero width or height (a point or a line). Provide a
+        polygon covering a nonzero area.
+    """
+    minx, miny, maxx, maxy = polygon.bounds
+
+    if minx == maxx or miny == maxy:
+        msg = (
+            "Polygon area is degenerate: its bounding box has zero width or height "
+            "(a point or a line). Provide a polygon covering a nonzero area."
+        )
+        raise BadRequestError(msg)
+
+
 def _validate_output_dimensions(width: int | None, height: int | None) -> None:
     """Reject a non-positive explicit output ``width`` or ``height``.
 
@@ -521,7 +865,7 @@ def _validate_output_dimensions(width: int | None, height: int | None) -> None:
             raise BadRequestError(msg)
 
 
-def _resolve_grid_dimensions(
+def _output_grid_dimensions(
     dataset: DatasetReader,
     bounds: tuple[float, float, float, float],
     *,
@@ -530,10 +874,10 @@ def _resolve_grid_dimensions(
     height: int | None,
     max_size: int | None,
 ) -> tuple[int, int]:
-    """Resolve the output grid dimensions rio-tiler's ``part`` will produce.
+    """Compute the output grid dimensions rio-tiler's ``part``/``feature`` produces.
 
-    Mirrors the dimension logic in ``rio_tiler.reader.part`` so the resulting
-    cell count can be checked against the ceiling before the array is read:
+    Mirrors the dimension logic in ``rio_tiler.reader.part`` so the resulting cell
+    count can be checked against the ceiling before the array is read:
 
     - both ``width`` and ``height`` given: returned unchanged (``part`` ignores
       ``max_size`` then);
@@ -541,6 +885,15 @@ def _resolve_grid_dimensions(
       ratio (``part`` upsamples the given dimension);
     - neither given: ``max_size`` caps the longer axis of the read window, or,
       when ``max_size`` is also ``None``, the native window is read.
+
+    A reprojecting read (``read_crs != dataset.crs``) is measured on the
+    *destination* VRT grid, which Web Mercator stretches near the poles far beyond
+    the same box on the source pixel grid, so bounding a reprojecting read on the
+    source grid would under-count it by orders of magnitude. Unlike
+    :func:`_resolve_grid_dimensions`, this only computes dimensions; it does not
+    reject a too-thin box (the ``/area`` read is permissive: a sub-pixel polygon
+    reads a tiny window). The caller must pass a non-degenerate box (non-zero
+    width and height), so the aspect-ratio division is safe.
 
     Args:
         dataset: The open rasterio dataset, for the read-window geometry.
@@ -555,18 +908,12 @@ def _resolve_grid_dimensions(
     Returns:
         tuple[int, int]: The resolved ``(width, height)``.
 
-    Raises:
-        BadRequestError: If neither dimension is given and the bounding box
-            spans less than half a source pixel in an axis (too thin to sample).
-            The host application's titiler exception handlers render this as a
-            400 response.
-
     Examples:
         Both dimensions given are returned unchanged; this is the only case that
         short-circuits before the read window is consulted, so ``dataset`` and
         ``bounds`` are unused (hence the placeholder values below):
 
-        >>> _resolve_grid_dimensions(
+        >>> _output_grid_dimensions(
         ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
         ...     max_size=None,
         ... )
@@ -581,11 +928,9 @@ def _resolve_grid_dimensions(
     if width is not None and height is not None:
         return width, height
 
-    reprojecting = read_crs != dataset.crs
-
     # Match part's read window: the reprojected VRT grid when the read
     # reprojects, else the native window over the source transform.
-    if reprojecting:
+    if read_crs != dataset.crs:
         _, window_width, window_height = get_vrt_transform(
             dataset, bounds, height, width, dst_crs=read_crs
         )
@@ -593,25 +938,99 @@ def _resolve_grid_dimensions(
         window = windows.from_bounds(*bounds, transform=dataset.transform)
         window_width, window_height = window.width, window.height
 
-    # Take the aspect ratio first, then multiply, matching part's exact float
-    # association so the derived dimension is bit-identical to what it produces.
-    ratio = window_height / window_width
-
+    # Aspect ratio first, then multiply, matching part's exact float association
+    # so the derived dimension is bit-identical to what it produces. Taken only in
+    # the lone-dimension branches, where the read window is non-empty.
     if width is not None:
-        return width, math.ceil(width * ratio)
+        return width, math.ceil(width * (window_height / window_width))
 
     if height is not None:
-        return math.ceil(height / ratio), height
+        return math.ceil(height / (window_height / window_width)), height
 
-    # Neither dimension was given, so reject a box too thin to sample: one
-    # covering less than half a source pixel in an axis has no data to sample and
-    # would read as a single value stretched across the extent. Measure the box on
-    # the source pixel grid (reprojecting the bounds to the source CRS first when
-    # the read reprojects), which is uniform at every latitude. The destination
-    # grid is not: rio-tiler clamps its resolution near the poles, so measuring
-    # there would misjudge ordinary reads of a global dataset.
+    if max_size is None:
+        return round(window_width), round(window_height)
+
+    return _scale_to_max_size(max_size, round(window_width), round(window_height))
+
+
+def _resolve_grid_dimensions(
+    dataset: DatasetReader,
+    bounds: tuple[float, float, float, float],
+    *,
+    read_crs: rasterio.CRS,
+    width: int | None,
+    height: int | None,
+    max_size: int | None,
+) -> tuple[int, int]:
+    """Resolve the ``part`` output dimensions, rejecting a too-thin bounding box.
+
+    The bounding-box (``/bbox``) contract: :func:`_output_grid_dimensions`, but
+    when the size is left entirely to the read window (neither ``width`` nor
+    ``height`` given) a box spanning less than half a source pixel in an axis is
+    rejected, since it has no data to sample and would read as a single value
+    stretched across the extent.
+
+    Args:
+        dataset: The open rasterio dataset, for the read-window geometry.
+        bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
+        read_crs: The CRS the bounds are expressed in and that the read reprojects
+            to.
+        width: The requested output width, or ``None``.
+        height: The requested output height, or ``None``.
+        max_size: The longest-output-dimension cap, or ``None`` to read native.
+
+    Returns:
+        tuple[int, int]: The resolved ``(width, height)``.
+
+    Examples:
+        >>> _resolve_grid_dimensions(
+        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
+        ...     max_size=None,
+        ... )
+        (256, 128)
+    """
+    # A too-thin box is rejected with a BadRequestError by the guard this calls
+    # (rendered as a 400 by the host application's titiler exception handlers).
+    if width is None and height is None:
+        _reject_subpixel_bbox(dataset, bounds, read_crs)
+
+    return _output_grid_dimensions(
+        dataset,
+        bounds,
+        read_crs=read_crs,
+        width=width,
+        height=height,
+        max_size=max_size,
+    )
+
+
+def _reject_subpixel_bbox(
+    dataset: DatasetReader,
+    bounds: tuple[float, float, float, float],
+    read_crs: rasterio.CRS,
+) -> None:
+    """Reject a bounding box spanning less than half a source pixel in an axis.
+
+    Measures the box on the source pixel grid (reprojecting the bounds to the
+    source CRS first when the read reprojects), which is uniform at every
+    latitude. The destination grid is not: rio-tiler clamps its resolution near
+    the poles, so measuring there would misjudge ordinary reads of a global
+    dataset.
+
+    Args:
+        dataset: The open rasterio dataset, for the source pixel grid.
+        bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
+        read_crs: The CRS the bounds are expressed in.
+
+    Raises:
+        BadRequestError: If the box spans less than half a source pixel in an
+            axis. The host application's titiler exception handlers render this as
+            a 400 response.
+    """
     source_bounds = (
-        transform_bounds(read_crs, dataset.crs, *bounds) if reprojecting else bounds
+        transform_bounds(read_crs, dataset.crs, *bounds)
+        if read_crs != dataset.crs
+        else bounds
     )
     source_window = windows.from_bounds(*source_bounds, transform=dataset.transform)
 
@@ -622,11 +1041,6 @@ def _resolve_grid_dimensions(
             "and height."
         )
         raise BadRequestError(msg)
-
-    if max_size is None:
-        return round(window_width), round(window_height)
-
-    return _scale_to_max_size(max_size, round(window_width), round(window_height))
 
 
 def _scale_to_max_size(
@@ -820,7 +1234,7 @@ def _build_grid_input(
     """
     bands = _resolve_read_bands(image, info, band_kwargs)
 
-    return imagedata_to_coverage_input(image, bands=bands, crs=crs)
+    return imagedata_to_grid_input(image, bands=bands, crs=crs)
 
 
 def _build_point_input(
@@ -848,7 +1262,41 @@ def _build_point_input(
     """
     bands = _resolve_read_bands(point, info, band_kwargs)
 
-    return pointdata_to_coverage_input(point, position=position, bands=bands, crs=crs)
+    return pointdata_to_point_input(point, position=position, bands=bands, crs=crs)
+
+
+def _build_polygon_input(
+    image: ImageData,
+    info: Info,
+    band_kwargs: dict[str, Any],
+    polygon: Polygon,
+    stat: Stat,
+    crs: rasterio.CRS,
+) -> PolygonInput:
+    """Build a PolygonInput from a clipped image, resolving per-band metadata.
+
+    The area path's analogue of :func:`_build_grid_input`: the same band
+    resolution (for names and units), then the polygon converter, which reduces
+    the clipped image to one scalar per band by ``stat`` and takes each band's
+    range dtype from that reduced value.
+
+    Args:
+        image: The polygon-clipped image.
+        info: The reader's dataset info (for source band metadata).
+        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
+            ``expression``).
+        polygon: The polygon the reduced values summarize, in ``crs``.
+        stat: The statistic to reduce each band by.
+        crs: The CRS to label the coverage with.
+
+    Returns:
+        PolygonInput: The intermediate representation for the modeler.
+    """
+    bands = _resolve_read_bands(image, info, band_kwargs)
+
+    return imagedata_to_polygon_input(
+        image, geometry=polygon, stat=stat, bands=bands, crs=crs
+    )
 
 
 def _resolve_read_bands(
