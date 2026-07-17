@@ -26,7 +26,7 @@ right status codes.
 import dataclasses
 import math
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, assert_never
 
 import rasterio
 from attrs import define
@@ -240,39 +240,42 @@ class CovJSONFactory(BaseFactory):
             dataset_kwargs = to_kwargs(dataset_params)
             coverage_input: MultiPointInput | PointInput
 
-            if isinstance(parsed, MultiPoint):
-                n_positions = len(parsed.positions)
+            match parsed:
+                case MultiPoint():
+                    n_positions = len(parsed.positions)
 
-                if n_positions > self.max_samples:
-                    msg = (
-                        f"Too many positions: {n_positions} exceeds the maximum "
-                        f"of {self.max_samples}."
+                    if n_positions > self.max_samples:
+                        msg = (
+                            f"Too many positions: {n_positions} exceeds the maximum "
+                            f"of {self.max_samples}."
+                        )
+                        raise BadRequestError(msg)
+
+                    samples, info = _read_multipoint(
+                        self.reader,
+                        src_path,
+                        parsed,
+                        read_crs=read_crs,
+                        band_kwargs=band_kwargs,
+                        dataset_kwargs=dataset_kwargs,
                     )
-                    raise BadRequestError(msg)
-
-                samples, info = _read_multipoint(
-                    self.reader,
-                    src_path,
-                    parsed,
-                    read_crs=read_crs,
-                    band_kwargs=band_kwargs,
-                    dataset_kwargs=dataset_kwargs,
-                )
-                coverage_input = _build_multipoint_input(
-                    samples, info, band_kwargs, parsed, label_crs
-                )
-            else:
-                point, info = _read_point(
-                    self.reader,
-                    src_path,
-                    parsed,
-                    read_crs=read_crs,
-                    band_kwargs=band_kwargs,
-                    dataset_kwargs=dataset_kwargs,
-                )
-                coverage_input = _build_point_input(
-                    point, info, band_kwargs, parsed, label_crs
-                )
+                    coverage_input = _build_multipoint_input(
+                        samples, info, band_kwargs, parsed, label_crs
+                    )
+                case Position():
+                    point, info = _read_point(
+                        self.reader,
+                        src_path,
+                        parsed,
+                        read_crs=read_crs,
+                        band_kwargs=band_kwargs,
+                        dataset_kwargs=dataset_kwargs,
+                    )
+                    coverage_input = _build_point_input(
+                        point, info, band_kwargs, parsed, label_crs
+                    )
+                case _:  # pragma: no cover
+                    assert_never(parsed)
 
             return _covjson_response(to_coverage(coverage_input), label_crs)
 
