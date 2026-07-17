@@ -1131,6 +1131,31 @@ def test_position_multipoint_rejects_malformed_coords(
     assert response.status_code == 400, response.text
 
 
+def test_position_multipoint_nodata_edge_read_is_a_known_error(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    """A last-row/column position read with nodata currently errors (upstream bug).
+
+    This is the one hole in the "an out-of-bounds position becomes null, not an
+    error" contract: a position in the dataset's last row or column, read with
+    ``nodata`` set, trips a rio-tiler off-by-one that flags the edge-aligned read
+    window boundless. A WarpedVRT then refuses it, and the ValueError propagates
+    (an unhandled 500 in a deployment) rather than nulling that one position.
+    Pinned to the current behavior so it flags when the upstream fix lands (issue
+    #73, upstream cogeotiff/rio-tiler#966).
+    """
+    # (5, -2.5) is the center of tiny_cog's bottom-right pixel: last row and column.
+    with pytest.raises(ValueError, match="boundless"):
+        client.get(
+            "/position",
+            params={
+                "url": tiny_cog_path,
+                "coords": "MULTIPOINT((5 -2.5))",
+                "nodata": 0,
+            },
+        )
+
+
 def test_resolve_unread_bands_derives_from_info_without_a_read() -> None:
     """Band metadata for an all-out-of-bounds multipoint comes from info alone."""
     info = two_band_info(dtype="int16")
