@@ -367,11 +367,11 @@ class MultiPointInput(_CoverageInputBase):
             raise ValueError(msg)
 
 
-# Alias for the per-domain input union. GridInput, PointInput, and PolygonInput
-# are members; the modeler's `match` dispatches on each, and `assert_never` in
-# its default arm enforces exhaustiveness as further variants (e.g.,
-# PointSeriesInput) join.
-CoverageInput = GridInput | PointInput | PolygonInput
+# Alias for the per-domain input union. GridInput, PointInput, PolygonInput, and
+# MultiPointInput are members; the modeler's `match` dispatches on each, and
+# `assert_never` in its default arm enforces exhaustiveness as further variants
+# (e.g., PointSeriesInput) join.
+CoverageInput = GridInput | PointInput | PolygonInput | MultiPointInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
