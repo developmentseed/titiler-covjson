@@ -2,8 +2,9 @@
 
 Serves a single dataset as CoverageJSON over three routes: a 2-D Grid coverage
 for a bounding box (``GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}``), a Point
-coverage for a single position (``GET {prefix}/position?coords=POINT(x y)``), and
-a Polygon coverage reducing an area to one value per band
+or MultiPoint coverage for one or more positions
+(``GET {prefix}/position?coords=POINT(x y)`` or ``coords=MULTIPOINT((x y), ...)``),
+and a Polygon coverage reducing an area to one value per band
 (``GET {prefix}/area?coords=POLYGON((...))``), reusing titiler's
 dependency-injectors for the dataset path, band selection, dataset options, and
 (for the bounding box) output sizing. It reads with rio-tiler and funnels the
@@ -56,24 +57,36 @@ from titiler_covjson.dependencies import (
     to_kwargs,
     validate_covjson_format,
 )
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 from titiler_covjson.helpers import crs_to_ogc_uri
 from titiler_covjson.input import (
     BandInfo,
     GridInput,
+    MultiPointInput,
     PointInput,
     PolygonInput,
     band_info_from_reader_info,
     imagedata_to_grid_input,
     imagedata_to_polygon_input,
+    pointdata_to_multipoint_input,
     pointdata_to_point_input,
 )
 from titiler_covjson.modeler import to_coverage
 from titiler_covjson.reduce import Stat
 from titiler_covjson.responses import CovJSONResponse
-from titiler_covjson.wkt import InvalidCoords, parse_point_wkt, parse_polygon_wkt
+from titiler_covjson.wkt import (
+    InvalidCoords,
+    parse_polygon_wkt,
+    parse_position_coords,
+)
 
 DEFAULT_MAX_SIZE = 1024
+
+# The default cap on the number of positions a single MULTIPOINT may name. It
+# bounds the number of point reads (one per position), a distinct resource from
+# max_cells (which bounds one array allocation). A backstop against a large
+# request, not a promised contract: typical query-string limits bind first.
+DEFAULT_MAX_SAMPLES = 1000
 
 # CRS84 is WGS84 with longitude/latitude axis order (the CovJSON-preferred label
 # for geographic output). It is distinct from EPSG:4326 (latitude/longitude
@@ -86,15 +99,17 @@ class CovJSONFactory(BaseFactory):
     """Serve a single dataset as CoverageJSON over ``/bbox``, ``/position``, ``/area``.
 
     ``/bbox`` returns a Grid coverage for a bounding box; ``/position`` returns a
-    Point coverage for a single position; ``/area`` returns a Polygon coverage
-    reducing the dataset over a polygon to one value per band. Collaborators are
-    constructor fields (the composition root): the reader and the titiler
-    dependency-injectors for path, band selection, dataset options, and output
-    sizing. Two sizing knobs are configurable: ``default_max_size``, the longest
-    output dimension applied when no sizing is requested on ``/bbox`` (a request
-    still succeeds, just coarser), and ``max_cells``, a hard ceiling on the read
-    cell count that bounds ``/bbox`` and ``/area`` (``/position`` samples a single
-    cell and needs neither).
+    Point coverage for a single ``POINT`` or a MultiPoint coverage for a
+    ``MULTIPOINT``; ``/area`` returns a Polygon coverage reducing the dataset over
+    a polygon to one value per band. Collaborators are constructor fields (the
+    composition root): the reader and the titiler dependency-injectors for path,
+    band selection, dataset options, and output sizing. Three sizing knobs are
+    configurable: ``default_max_size``, the longest output dimension applied when
+    no sizing is requested on ``/bbox`` (a request still succeeds, just coarser);
+    ``max_cells``, a hard ceiling on the read cell count that bounds ``/bbox`` and
+    ``/area``; and ``max_samples``, the cap on the number of positions a
+    ``/position`` ``MULTIPOINT`` may name (each is one point read). A single
+    ``POINT`` needs none of the three.
     """
 
     reader: type[Reader] = Reader
@@ -104,6 +119,7 @@ class CovJSONFactory(BaseFactory):
     image_dependency: type[PartFeatureParams] = PartFeatureParams
     default_max_size: int = DEFAULT_MAX_SIZE
     max_cells: int = DEFAULT_MAX_SIZE * DEFAULT_MAX_SIZE
+    max_samples: int = DEFAULT_MAX_SAMPLES
 
     def __attrs_post_init__(self) -> None:
         """Validate the sizing invariant, then register routes (base init).
@@ -179,21 +195,32 @@ class CovJSONFactory(BaseFactory):
             "/position",
             response_class=CovJSONResponse,
             operation_id=f"{self.operation_prefix}getCoverageForPosition",
-            summary="Get a CoverageJSON Point coverage for a position",
+            summary="Get a CoverageJSON Point or MultiPoint coverage for a position",
             description=(
-                "Sample the dataset at the position `coords` (a WKT `POINT(x y)`) "
-                "and return a CoverageJSON Point coverage. By default the position "
-                "is interpreted in, and the output labeled with, CRS84 "
-                "(longitude/latitude); pass `crs` to override. Vertical selection "
-                "(a `z` level, or a 3-D `POINT Z`) is rejected: the 2-D raster "
-                "backing cannot sample a vertical level. A `datetime` selector is "
-                "not yet honored (this dataset has no temporal dimension)."
+                "Sample the dataset at the position(s) `coords` and return a "
+                "CoverageJSON coverage: a WKT `POINT(x y)` yields a Point coverage "
+                "at that location, and a WKT `MULTIPOINT((x y), ...)` yields a "
+                "MultiPoint coverage with one value per band at each position. A "
+                "MULTIPOINT position outside the dataset (or on nodata) becomes a "
+                "`null` value rather than an error, so the request still succeeds "
+                "even when every position is outside. The number of positions is "
+                "capped (see `max_samples`). By default the position is interpreted "
+                "in, and the output labeled with, CRS84 (longitude/latitude); pass "
+                "`crs` to override. Vertical selection (a `z` level, or a 3-D "
+                "`POINT Z` / `MULTIPOINT Z`) is rejected: the 2-D raster backing "
+                "cannot sample a vertical level. A `datetime` selector is not yet "
+                "honored (this dataset has no temporal dimension)."
             ),
         )
         def position_coverage(
             coords: Annotated[
                 str,
-                Query(description="Position as WKT, e.g., POINT(0 0)."),
+                Query(
+                    description=(
+                        "Position(s) as WKT: POINT(x y) or "
+                        "MULTIPOINT((x y), ...), e.g., POINT(0 0)."
+                    ),
+                ),
             ],
             src_path: Annotated[str, Depends(self.path_dependency)],
             band_params: Annotated[CovJSONBandParams, Depends(self.band_dependency)],
@@ -202,29 +229,52 @@ class CovJSONFactory(BaseFactory):
             _vertical: Annotated[None, Depends(reject_vertical_selection)],
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
-            position = parse_point_wkt(coords)
+            parsed = parse_position_coords(coords)
 
-            if isinstance(position, InvalidCoords):
-                raise BadRequestError(position.message)
+            if isinstance(parsed, InvalidCoords):
+                raise BadRequestError(parsed.message)
 
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)
             band_kwargs = to_kwargs(band_params)
+            dataset_kwargs = to_kwargs(dataset_params)
+            coverage_input: MultiPointInput | PointInput
 
-            point, info = _read_point(
-                self.reader,
-                src_path,
-                position,
-                read_crs=read_crs,
-                band_kwargs=band_kwargs,
-                dataset_kwargs=to_kwargs(dataset_params),
-            )
+            if isinstance(parsed, MultiPoint):
+                n_positions = len(parsed.positions)
 
-            point_input = _build_point_input(
-                point, info, band_kwargs, position, label_crs
-            )
+                if n_positions > self.max_samples:
+                    msg = (
+                        f"Too many positions: {n_positions} exceeds the maximum "
+                        f"of {self.max_samples}."
+                    )
+                    raise BadRequestError(msg)
 
-            return _covjson_response(to_coverage(point_input), label_crs)
+                samples, info = _read_multipoint(
+                    self.reader,
+                    src_path,
+                    parsed,
+                    read_crs=read_crs,
+                    band_kwargs=band_kwargs,
+                    dataset_kwargs=dataset_kwargs,
+                )
+                coverage_input = _build_multipoint_input(
+                    samples, info, band_kwargs, parsed, label_crs
+                )
+            else:
+                point, info = _read_point(
+                    self.reader,
+                    src_path,
+                    parsed,
+                    read_crs=read_crs,
+                    band_kwargs=band_kwargs,
+                    dataset_kwargs=dataset_kwargs,
+                )
+                coverage_input = _build_point_input(
+                    point, info, band_kwargs, parsed, label_crs
+                )
+
+            return _covjson_response(to_coverage(coverage_input), label_crs)
 
         @self.router.get(
             "/area",
@@ -454,6 +504,79 @@ def _read_point(
             raise BadRequestError(msg) from exc
 
     return point, info
+
+
+def _read_multipoint(
+    reader: type[Reader],
+    src_path: str,
+    geometry: MultiPoint,
+    *,
+    read_crs: rasterio.CRS,
+    band_kwargs: dict[str, Any],
+    dataset_kwargs: dict[str, Any],
+) -> tuple[list[PointData | None], Info]:
+    """Sample each position of ``geometry`` from ``src_path``, once per position.
+
+    Opens ``src_path`` once and samples every position (interpreting each in
+    ``read_crs``), returning one entry per position alongside the reader's dataset
+    ``info``. A position outside the dataset bounds is reported as ``None`` rather
+    than raised, so an out-of-bounds position becomes a ``null`` value in the
+    coverage and the request still succeeds even when every position is outside.
+    An out-of-range band index, and a duplicate-derived-name expression, are both
+    rejected before any position is read, so a bad selection does not read N times
+    before failing.
+
+    Only ``PointOutsideBounds`` is turned into ``None``: a genuine reader error
+    (e.g. a read that a ``WarpedVRT`` refuses) still propagates, since silencing
+    every failure would hide real faults.
+
+    Args:
+        reader: The rio-tiler reader type used to open ``src_path``.
+        src_path: The dataset path or URL.
+        geometry: The positions to sample, in ``read_crs``.
+        read_crs: The CRS the positions are expressed in.
+        band_kwargs: Band-selection keyword arguments for ``point`` (indexes or
+            expression).
+        dataset_kwargs: Dataset-read keyword arguments for ``point`` (nodata,
+            unscale, resampling, reprojection).
+
+    A bad band selection (an out-of-range index, or a duplicate-derived-name
+    expression) is rejected here as a ``BadRequestError`` by the guards this
+    calls, which the host application's titiler exception handlers render as a
+    400 response.
+
+    Returns:
+        tuple[list[PointData | None], Info]: One sample per position (``None`` for
+            an out-of-bounds position) and the reader's dataset info.
+    """
+    with reader(src_path) as src_dst:
+        info = src_dst.info()
+        _validate_band_indexes(band_kwargs.get("indexes"), info)
+
+        # Validate a band expression once, before sampling every position: a
+        # duplicate-derived-name expression would otherwise read all N positions
+        # before failing in band resolution. _resolve_read_bands re-derives the
+        # names later; this call is just the pre-read guard.
+        if (expression := band_kwargs.get("expression")) is not None:
+            _expression_band_names(expression)
+
+        samples: list[PointData | None] = []
+
+        for x, y in geometry.positions:
+            try:
+                samples.append(
+                    src_dst.point(
+                        x,
+                        y,
+                        coord_crs=read_crs,
+                        **band_kwargs,
+                        **dataset_kwargs,
+                    )
+                )
+            except PointOutsideBounds:
+                samples.append(None)
+
+    return samples, info
 
 
 def _read_polygon_image(
@@ -1048,6 +1171,44 @@ def _build_point_input(
     return pointdata_to_point_input(point, position=position, bands=bands, crs=crs)
 
 
+def _build_multipoint_input(
+    samples: list[PointData | None],
+    info: Info,
+    band_kwargs: dict[str, Any],
+    geometry: MultiPoint,
+    crs: rasterio.CRS,
+) -> MultiPointInput:
+    """Build a MultiPointInput from per-position samples, resolving band metadata.
+
+    The multipoint analogue of :func:`_build_point_input`. Band metadata is
+    resolved from any successful read when there is one (its names and dtype), and
+    from the dataset ``info`` alone when every position fell outside the dataset
+    (there is then no read to resolve from). The converter aligns each sample to a
+    position and stamps the band dtype from the stacked array.
+
+    Args:
+        samples: One entry per position (``None`` for an out-of-bounds position).
+        info: The reader's dataset info (for source band metadata).
+        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
+            ``expression``).
+        geometry: The sampled positions, in ``crs``.
+        crs: The CRS to label the coverage with.
+
+    Returns:
+        MultiPointInput: The intermediate representation for the modeler.
+    """
+    hit = next((sample for sample in samples if sample is not None), None)
+    bands = (
+        _resolve_read_bands(hit, info, band_kwargs)
+        if hit is not None
+        else _resolve_unread_bands(info, band_kwargs)
+    )
+
+    return pointdata_to_multipoint_input(
+        samples, geometry=geometry, bands=bands, crs=crs
+    )
+
+
 def _build_polygon_input(
     image: ImageData,
     info: Info,
@@ -1121,6 +1282,61 @@ def _resolve_read_bands(
         dataclasses.replace(by_name[name], dtype=read.array.dtype)
         for name in read.band_names
     )
+
+
+def _resolve_unread_bands(
+    info: Info,
+    band_kwargs: dict[str, Any],
+) -> tuple[BandInfo, ...]:
+    """Resolve per-band metadata from dataset ``info`` alone, without a read.
+
+    Used when a multipoint sampled every position outside the dataset: there is
+    no read to resolve bands from, so the names and dtype come from ``info``. The
+    result matches what :func:`_resolve_read_bands` would produce from a
+    successful read of the same selection, except that the dtype is the source
+    ``info.dtype`` rather than a read's (a read can differ, e.g. unscale casting an
+    integer band to float, but an all-outside multipoint has no values for that to
+    matter to: every entry is ``null``).
+
+    ``indexes`` select positionally (1-based) from the dataset's bands rather than
+    by reconstructing rio-tiler's ``b{ix}`` names, so this holds no second copy of
+    that naming rule.
+
+    Args:
+        info: The reader's dataset info.
+        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
+            ``expression``).
+
+    Returns:
+        tuple[BandInfo, ...]: One entry per selected band, in request order.
+
+    Examples:
+        >>> from rio_tiler.models import Info
+        >>> info = Info(
+        ...     bounds=(0.0, 0.0, 1.0, 1.0),
+        ...     crs="http://www.opengis.net/def/crs/EPSG/0/4326",
+        ...     band_metadata=[("b1", {}), ("b2", {})],
+        ...     band_descriptions=[("b1", "red"), ("b2", "nir")],
+        ...     dtype="int16",
+        ...     nodata_type="None",
+        ... )
+        >>> [band.name for band in _resolve_unread_bands(info, {})]
+        ['b1', 'b2']
+        >>> [band.name for band in _resolve_unread_bands(info, {"indexes": (2, 1)})]
+        ['b2', 'b1']
+        >>> _resolve_unread_bands(info, {"expression": "b1+b2"})[0].name
+        'b1+b2'
+    """
+    if (expression := band_kwargs.get("expression")) is not None:
+        return tuple(
+            BandInfo(name=name, dtype=info.dtype)
+            for name in _expression_band_names(expression)
+        )
+
+    bands = band_info_from_reader_info(info)
+    indexes = band_kwargs.get("indexes")
+
+    return tuple(bands[i - 1] for i in indexes) if indexes else tuple(bands)
 
 
 def _expression_band_names(expression: str) -> tuple[str, ...]:

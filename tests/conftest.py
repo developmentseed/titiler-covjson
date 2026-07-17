@@ -17,7 +17,11 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from titiler.core.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 
-from titiler_covjson.factory import DEFAULT_MAX_SIZE, CovJSONFactory
+from titiler_covjson.factory import (
+    DEFAULT_MAX_SAMPLES,
+    DEFAULT_MAX_SIZE,
+    CovJSONFactory,
+)
 
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -176,6 +180,16 @@ def small_ceiling_client() -> TestClient:
     return _make_client(default_max_size=4, max_cells=16)
 
 
+@pytest.fixture
+def small_samples_client() -> TestClient:
+    """Return a TestClient over a factory with a tiny MULTIPOINT position cap.
+
+    Returns:
+        TestClient: Client whose factory uses ``max_samples=2``.
+    """
+    return _make_client(max_samples=2)
+
+
 def validate_covjson(instance: dict[str, Any], definition: str | None = None) -> None:
     """Validate an instance against the CoverageJSON schema or a named definition.
 
@@ -244,6 +258,7 @@ def _make_client(
     *,
     default_max_size: int = DEFAULT_MAX_SIZE,
     max_cells: int = DEFAULT_MAX_SIZE**2,
+    max_samples: int = DEFAULT_MAX_SAMPLES,
 ) -> TestClient:
     """Build a TestClient over an app mounting a CovJSONFactory.
 
@@ -254,11 +269,16 @@ def _make_client(
     Args:
         default_max_size: The factory's downsampling default.
         max_cells: The factory's hard cell-count ceiling.
+        max_samples: The factory's cap on the number of MULTIPOINT positions.
 
     Returns:
         TestClient: Client bound to the mounted app.
     """
-    factory = CovJSONFactory(default_max_size=default_max_size, max_cells=max_cells)
+    factory = CovJSONFactory(
+        default_max_size=default_max_size,
+        max_cells=max_cells,
+        max_samples=max_samples,
+    )
     app = FastAPI()
     app.include_router(factory.router)
     add_exception_handlers(app, DEFAULT_STATUS_CODES)

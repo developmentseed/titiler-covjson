@@ -14,6 +14,7 @@ from titiler_covjson.factory import (
     _output_grid_dimensions,
     _resolve_grid_dimensions,
     _resolve_read_bands,
+    _resolve_unread_bands,
 )
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
 
@@ -914,6 +915,238 @@ def test_position_requires_coords(client: TestClient, cog_path: str) -> None:
 def test_position_requires_url(client: TestClient) -> None:
     response = client.get("/position", params={"coords": "POINT(0 0)"})
     assert response.status_code == 422, response.text
+
+
+# --- /position MULTIPOINT ---------------------------------------------------
+
+
+def test_position_multipoint_returns_schema_valid_multipoint_coverage(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # tiny_cog is 2x2 over (-10,-5,10,5): centers x in {-5, 5}, y in {2.5, -2.5}.
+    # Position 0 = top-left (band1 0.0, band2 nodata -> null); position 1 =
+    # bottom-right (both 3.0). Small enough to assert the whole document: a
+    # composite tuple axis of the two positions, 1-D ranges over composite.
+    response = client.get(
+        "/position",
+        params={
+            "url": tiny_cog_path,
+            "coords": "MULTIPOINT((-5 2.5), (5 -2.5))",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(COVJSON_MEDIA_TYPE)
+    assert response.headers["content-crs"] == (
+        "<http://www.opengis.net/def/crs/OGC/1.3/CRS84>"
+    )
+
+    body = response.json()
+    validate_covjson(body)
+
+    assert body == {
+        "type": "Coverage",
+        "domain": {
+            "type": "Domain",
+            "domainType": "MultiPoint",
+            "axes": {
+                "composite": {
+                    "dataType": "tuple",
+                    "coordinates": ["x", "y"],
+                    "values": [[-5.0, 2.5], [5.0, -2.5]],
+                }
+            },
+            "referencing": [
+                {
+                    "coordinates": ["x", "y"],
+                    "system": {
+                        "type": "GeographicCRS",
+                        "id": "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+                    },
+                }
+            ],
+        },
+        "parameters": {
+            "b1": {
+                "type": "Parameter",
+                "observedProperty": {"label": {"en": "red"}},
+            },
+            "b2": {
+                "type": "Parameter",
+                "observedProperty": {"label": {"en": "nir"}},
+            },
+        },
+        "ranges": {
+            "b1": {
+                "type": "NdArray",
+                "dataType": "float",
+                "axisNames": ["composite"],
+                "shape": [2],
+                "values": [0.0, 3.0],
+            },
+            "b2": {
+                "type": "NdArray",
+                "dataType": "float",
+                "axisNames": ["composite"],
+                "shape": [2],
+                "values": [None, 3.0],
+            },
+        },
+    }
+
+
+def test_position_point_still_returns_point_domain(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # A plain POINT is unchanged by the MULTIPOINT addition: still a Point domain.
+    response = client.get(
+        "/position", params={"url": tiny_cog_path, "coords": "POINT(0 0)"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["domain"]["domainType"] == "Point"
+
+
+def test_position_multipoint_partial_out_of_bounds_nulls_position(
+    client: TestClient, cog_path: str
+) -> None:
+    # An out-of-bounds position becomes null; the request still succeeds (200),
+    # rather than failing the whole set.
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "MULTIPOINT((0 0), (999 999))"},
+    )
+
+    assert response.status_code == 200, response.text
+    values = response.json()["ranges"]["b1"]["values"]
+    assert values[0] is not None
+    assert values[1] is None
+
+
+def test_position_multipoint_all_out_of_bounds_is_all_null(
+    client: TestClient, cog_path: str
+) -> None:
+    # Every position outside the dataset still yields a 200 all-null coverage,
+    # not a 400: the multipoint form opts into per-position set semantics.
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "MULTIPOINT((999 999), (998 998))"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["domain"]["domainType"] == "MultiPoint"
+    assert body["ranges"]["b1"]["values"] == [None, None]
+
+
+def test_position_multipoint_nodata_serializes_as_null(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # The top-left position samples band 2's nodata sentinel -> null in place.
+    response = client.get(
+        "/position",
+        params={"url": tiny_cog_path, "coords": "MULTIPOINT((-5 2.5), (5 -2.5))"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b2"]["values"] == [None, 3.0]
+
+
+def test_position_multipoint_selects_bands_by_expression(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # An expression works per position: b1+b2 at the two sampled positions.
+    response = client.get(
+        "/position",
+        params={
+            "url": tiny_cog_path,
+            "coords": "MULTIPOINT((5 2.5), (5 -2.5))",
+            "expression": "b1+b2",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert list(body["ranges"]) == ["b1+b2"]
+    assert body["ranges"]["b1+b2"]["shape"] == [2]
+
+
+def test_position_multipoint_exceeds_max_samples(
+    small_samples_client: TestClient, cog_path: str
+) -> None:
+    # More positions than max_samples is rejected before any read.
+    response = small_samples_client.get(
+        "/position",
+        params={"url": cog_path, "coords": "MULTIPOINT((0 0), (1 1), (2 2))"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert "positions" in response.json()["detail"]
+
+
+def test_position_multipoint_rejects_out_of_range_band(
+    client: TestClient, cog_path: str
+) -> None:
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "MULTIPOINT((0 0), (1 1))", "bidx": 5},
+    )
+
+    assert response.status_code == 400, response.text
+
+
+def test_position_multipoint_rejects_duplicate_expression(
+    client: TestClient, cog_path: str
+) -> None:
+    response = client.get(
+        "/position",
+        params={
+            "url": cog_path,
+            "coords": "MULTIPOINT((0 0), (1 1))",
+            "expression": "b1;b1",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+
+
+def test_position_multipoint_rejects_vertical_z(
+    client: TestClient, cog_path: str
+) -> None:
+    # A 3-D MULTIPOINT Z is rejected: the 2-D raster cannot sample a level.
+    response = client.get(
+        "/position",
+        params={"url": cog_path, "coords": "MULTIPOINT Z ((0 0 5), (1 1 5))"},
+    )
+
+    assert response.status_code == 400, response.text
+
+
+def test_position_multipoint_rejects_malformed_coords(
+    client: TestClient, cog_path: str
+) -> None:
+    response = client.get(
+        "/position", params={"url": cog_path, "coords": "MULTIPOINT((0 0), (x 1))"}
+    )
+
+    assert response.status_code == 400, response.text
+
+
+def test_resolve_unread_bands_derives_from_info_without_a_read() -> None:
+    """Band metadata for an all-out-of-bounds multipoint comes from info alone."""
+    info = two_band_info(dtype="int16")
+
+    # No indexes: every band, in dataset order, dtype from info.
+    all_bands = _resolve_unread_bands(info, {})
+    assert [b.name for b in all_bands] == ["b1", "b2"]
+    assert all(b.dtype == np.dtype("int16") for b in all_bands)
+
+    # indexes select positionally (1-based), preserving request order.
+    reordered = _resolve_unread_bands(info, {"indexes": (2, 1)})
+    assert [b.name for b in reordered] == ["b2", "b1"]
+
+    # An expression names the derived bands.
+    expr = _resolve_unread_bands(info, {"expression": "b1+b2"})
+    assert [b.name for b in expr] == ["b1+b2"]
 
 
 # --- /area endpoint --------------------------------------------------------
