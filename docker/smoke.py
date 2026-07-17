@@ -1,10 +1,10 @@
 """End-to-end smoke check for the CoverageJSON container.
 
-Waits for the demo server, requests a CoverageJSON Grid (``/bbox``), Point
-(``/position``), and Polygon (``/area``) coverage for the bundled sample
-Cloud-Optimized GeoTIFF (COG), and asserts each response is a valid, non-empty
-CoverageJSON document. Runs on the host (via ``uv run``) so the image carries no
-test dependencies. Exits non-zero on any failure.
+Waits for the demo server, requests a CoverageJSON Grid (``/bbox``), Point and
+MultiPoint (``/position``), and Polygon (``/area``) coverage for the bundled
+sample Cloud-Optimized GeoTIFF (COG), and asserts each response is a valid,
+non-empty CoverageJSON document. Runs on the host (via ``uv run``) so the image
+carries no test dependencies. Exits non-zero on any failure.
 
 Run against a container published on ``localhost:8000``:
 ``uv run python docker/smoke.py``.
@@ -42,6 +42,12 @@ N_SAMPLE_CELLS = 24 * 24
 # valid ramp sample rather than a fixed value. The unit tests pin exact values on
 # an exact-pixel-size fixture instead.
 POSITION_COORDS = "POINT(0 0)"
+# Two interior positions sampled together on the same /position route return a
+# MultiPoint coverage: a composite tuple axis of the positions and a 1-D range
+# per band over it. The smoke asserts that shape, not exact values (the sampled
+# cells are platform dependent, as for POINT above).
+MULTIPOINT_COORDS = "MULTIPOINT((-5 -2), (5 2))"
+N_MULTIPOINT_POSITIONS = 2
 # A polygon over the whole sample extent reduces each band to one scalar. The
 # default statistic is the mean, which for the 0 .. 575 ramp lands inside the
 # ramp's range; the smoke asserts a finite in-range scalar rather than an exact
@@ -62,11 +68,11 @@ SCHEMA_PATH = (
 def main() -> int:
     """Request the demo endpoints and assert valid, non-empty CoverageJSON.
 
-    Exercises all three routes (a ``/bbox`` Grid coverage, a ``/position`` Point
-    coverage, and an ``/area`` Polygon coverage), and sends one deliberately
-    invalid request (an unsupported ``f``) that must be a 400, proving the
-    container maps bad input through its mounted exception handlers instead of
-    letting it surface as a 500.
+    Exercises every route (a ``/bbox`` Grid coverage, a ``/position`` Point and
+    MultiPoint coverage, and an ``/area`` Polygon coverage), and sends one
+    deliberately invalid request (an unsupported ``f``) that must be a 400,
+    proving the container maps bad input through its mounted exception handlers
+    instead of letting it surface as a 500.
 
     Returns:
         Process exit code: 0 when every check passes, 1 otherwise.
@@ -74,11 +80,13 @@ def main() -> int:
     good_bbox = _get_when_ready(_bbox_url(BASE_BBOX_URL, "CoverageJSON"))
     bad_bbox = _get(_bbox_url(BASE_BBOX_URL, "png"))
     position = _get(_position_url(POSITION_COORDS))
+    multipoint = _get(_position_url(MULTIPOINT_COORDS))
     area = _get(_area_url(AREA_COORDS))
 
     return _report(
         *_bbox_problems(good_bbox),
         *_position_problems(position),
+        *_multipoint_problems(multipoint),
         *_area_problems(area),
         *_bad_input_problems(bad_bbox),
     )
@@ -218,6 +226,26 @@ def _position_problems(
 
     yield from _envelope_problems(response.status, response.headers.get_content_type())
     yield from _position_content_problems(body)
+
+
+def _multipoint_problems(
+    response: HTTPResponse | urllib.error.HTTPError,
+) -> Iterator[str]:
+    """Yield every envelope and content problem for the MULTIPOINT response.
+
+    Reads the response once (the body is a single-use stream) and dispatches to
+    the shared envelope check and the MultiPoint-specific content check.
+
+    Args:
+        response: The response to the /position MULTIPOINT CoverageJSON request.
+
+    Yields:
+        A description of each envelope or content mismatch.
+    """
+    body = json.loads(response.read())
+
+    yield from _envelope_problems(response.status, response.headers.get_content_type())
+    yield from _multipoint_content_problems(body)
 
 
 def _area_problems(
@@ -433,6 +461,74 @@ def _scalar_value_problems(ranges: dict[str, Any]) -> Iterator[str]:
 
     if len(set(sampled)) > 1:
         yield f"position bands sample different cells: {sorted(set(sampled))}"
+
+
+def _multipoint_content_problems(body: dict[str, Any]) -> Iterator[str]:
+    """Yield any problem with the MultiPoint document's structure.
+
+    A schema-invalid body short-circuits: its structure is unreliable, so the
+    later structural checks would only add noise.
+
+    Args:
+        body: The parsed CoverageJSON MULTIPOINT /position response.
+
+    Yields:
+        A description of each mismatch; nothing when the document is a valid
+        MultiPoint coverage over the sampled positions.
+    """
+    try:
+        jsonschema.validate(body, json.loads(SCHEMA_PATH.read_text()))
+    except jsonschema.ValidationError as error:
+        yield f"multipoint schema invalid: {error.message}"
+
+        return
+
+    if (type_ := body.get("type")) != "Coverage":
+        yield f"multipoint type {type_!r} != 'Coverage'"
+
+    if (domain_type := body.get("domain", {}).get("domainType")) != "MultiPoint":
+        yield f"multipoint domain.domainType {domain_type!r} != 'MultiPoint'"
+
+    composite = body.get("domain", {}).get("axes", {}).get("composite", {})
+
+    if (data_type := composite.get("dataType")) != "tuple":
+        yield f"multipoint composite.dataType {data_type!r} != 'tuple'"
+
+    if (n := len(composite.get("values", []))) != N_MULTIPOINT_POSITIONS:
+        yield (
+            f"multipoint composite has {n} positions, expected {N_MULTIPOINT_POSITIONS}"
+        )
+
+    if ranges := body.get("ranges", {}):
+        yield from _composite_shape_problems(ranges)
+    else:
+        yield "multipoint ranges is empty"
+
+
+def _composite_shape_problems(ranges: dict[str, Any]) -> Iterator[str]:
+    """Yield a mismatch for any range that is not 1-D over the composite axis.
+
+    Each band of a MultiPoint coverage runs 1-D over ``composite``: one value per
+    position, so ``axisNames`` is ``["composite"]`` and ``shape`` is
+    ``[N_MULTIPOINT_POSITIONS]``.
+
+    Args:
+        ranges: The response ``ranges`` mapping of band name to NdArray.
+
+    Yields:
+        A description for each range whose axis labels or shape do not match.
+    """
+    for name, band in ranges.items():
+        if (axis_names := band.get("axisNames")) != ["composite"]:
+            yield (
+                f"multipoint range {name!r}: axisNames {axis_names!r} != ['composite']"
+            )
+
+        if (shape := band.get("shape")) != [N_MULTIPOINT_POSITIONS]:
+            yield (
+                f"multipoint range {name!r}: shape {shape!r} != "
+                f"[{N_MULTIPOINT_POSITIONS}]"
+            )
 
 
 def _is_ramp_value(value: Any) -> bool:

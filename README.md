@@ -20,8 +20,11 @@ dataset, each returning a CoverageJSON coverage in its own domain.
 - **Available:**
   - `GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}`: a 2-D Grid coverage for a
     bounding box, with output sizing and a cell-count ceiling.
-  - `GET {prefix}/position?coords=POINT(x y)`: a Point coverage sampling a
-    single location.
+  - `GET {prefix}/position?coords=POINT(x y)` (or
+    `MULTIPOINT((x y), ...)`): a Point coverage sampling a single location, or a
+    MultiPoint coverage sampling each position (a position outside the dataset
+    becomes `null`, not an error). The number of positions is capped by
+    `max_samples`.
   - `GET {prefix}/area?coords=POLYGON((...))`: a Polygon coverage reducing the
     dataset over a polygon to one value per band by a `stat` (default `mean`).
     The reduction is an unweighted, all-touched pixel statistic: a pixel the
@@ -61,14 +64,16 @@ add_exception_handlers(app, DEFAULT_STATUS_CODES)
 ```
 
 Then request a coverage. A bounding box returns a Grid (the four bounds are one
-comma-delimited path segment, interpreted in CRS84 by default), a position
-returns a Point, and a polygon returns a Polygon reduced to one value per band
-(WKT whitespace is percent-encoded as `%20`):
+comma-delimited path segment, interpreted in CRS84 by default), a `POINT`
+returns a Point and a `MULTIPOINT` a MultiPoint, and a polygon returns a Polygon
+reduced to one value per band (WKT whitespace is percent-encoded as `%20`):
 
 ```bash
 curl "http://localhost:8000/bbox/-10,-5,10,5?url=/path/to/cog.tif"
 curl "http://localhost:8000/position?coords=POINT(0%200)&url=/path/to/cog.tif"
+curl "http://localhost:8000/position?coords=MULTIPOINT((0%200),(1%201))&url=/path/to/cog.tif"
 curl "http://localhost:8000/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=/path/to/cog.tif"
+curl "http://localhost:8000/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=/path/to/cog.tif&stat=std"
 ```
 
 ## Overriding the dataset error status
@@ -125,7 +130,9 @@ Request a coverage for the bundled sample COG (the response is
 ```bash
 curl "http://localhost:8000/bbox/-10,-5,10,5?url=/data/sample.tif&f=CoverageJSON"
 curl "http://localhost:8000/position?coords=POINT(0%200)&url=/data/sample.tif"
+curl "http://localhost:8000/position?coords=MULTIPOINT((0%200),(1%201))&url=/data/sample.tif"
 curl "http://localhost:8000/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=/data/sample.tif"
+curl "http://localhost:8000/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=/data/sample.tif&stat=std"
 ```
 
 ### Use your own COG
