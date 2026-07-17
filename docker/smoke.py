@@ -3,8 +3,10 @@
 Waits for the demo server, requests a CoverageJSON Grid (``/bbox``), Point and
 MultiPoint (``/position``), and Polygon (``/area``) coverage for the bundled
 sample Cloud-Optimized GeoTIFF (COG), and asserts each response is a valid,
-non-empty CoverageJSON document. Runs on the host (via ``uv run``) so the image
-carries no test dependencies. Exits non-zero on any failure.
+non-empty CoverageJSON document. Narrates each request, its status, and the
+coverage it returned, so a passing run shows what was served, not just a
+summary line. Runs on the host (via ``uv run``) so the image carries no test
+dependencies. Exits non-zero on any failure.
 
 Run against a container published on ``localhost:8000``:
 ``uv run python docker/smoke.py``.
@@ -20,7 +22,7 @@ from collections.abc import Iterator
 from http.client import HTTPResponse
 from math import prod
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import jsonschema
 
@@ -65,6 +67,23 @@ SCHEMA_PATH = (
 )
 
 
+class _Response(NamedTuple):
+    """A response read once into the parts the checks and narration both need.
+
+    The response body is a single-use stream, so it is read exactly once (into
+    ``body``) and shared, rather than each consumer re-reading it.
+
+    Attributes:
+        status: The HTTP status code, or ``None`` if the response exposes none.
+        content_type: The response content type (no charset parameter).
+        body: The parsed JSON body, or ``None`` when the body was not JSON.
+    """
+
+    status: int | None
+    content_type: str
+    body: Any
+
+
 def main() -> int:
     """Request the demo endpoints and assert valid, non-empty CoverageJSON.
 
@@ -72,16 +91,30 @@ def main() -> int:
     MultiPoint coverage, and an ``/area`` Polygon coverage), and sends one
     deliberately invalid request (an unsupported ``f``) that must be a 400,
     proving the container maps bad input through its mounted exception handlers
-    instead of letting it surface as a 500.
+    instead of letting it surface as a 500. Narrates each request and its
+    outcome along the way, so a passing run still shows what was served.
 
     Returns:
         Process exit code: 0 when every check passes, 1 otherwise.
     """
-    good_bbox = _get_when_ready(_bbox_url(BASE_BBOX_URL, "CoverageJSON"))
-    bad_bbox = _get(_bbox_url(BASE_BBOX_URL, "png"))
-    position = _get(_position_url(POSITION_COORDS))
-    multipoint = _get(_position_url(MULTIPOINT_COORDS))
-    area = _get(_area_url(AREA_COORDS))
+    good_bbox = _read(_get_when_ready(_bbox_url(BASE_BBOX_URL, "CoverageJSON")))
+    bad_bbox = _read(_get(_bbox_url(BASE_BBOX_URL, "png")))
+    position = _read(_get(_position_url(POSITION_COORDS)))
+    multipoint = _read(_get(_position_url(MULTIPOINT_COORDS)))
+    area = _read(_get(_area_url(AREA_COORDS)))
+
+    narrated = (
+        (f"GET /bbox/{BBOX}?f=CoverageJSON", good_bbox),
+        (f"GET /position?coords={POSITION_COORDS}", position),
+        (f"GET /position?coords={MULTIPOINT_COORDS}", multipoint),
+        (f"GET /area?coords={AREA_COORDS}", area),
+        (f"GET /bbox/{BBOX}?f=png", bad_bbox),
+    )
+    # Pad every label to the widest, so the "-> status" columns line up.
+    width = max(len(label) for label, _ in narrated)
+
+    for label, response in narrated:
+        print(_narrate(label, response, width))
 
     return _report(
         *_bbox_problems(good_bbox),
@@ -188,84 +221,133 @@ def _get(url: str) -> HTTPResponse | urllib.error.HTTPError:
         return http_error
 
 
-def _bbox_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _read(response: HTTPResponse | urllib.error.HTTPError) -> _Response:
+    """Read a raw response once into its status, content type, and parsed body.
+
+    The body is a single-use stream, so it is consumed here and the parsed value
+    shared by both the narration and the checks. A body that is not JSON (there
+    is none in a passing run) yields a ``None`` body rather than raising.
+
+    Args:
+        response: The raw HTTP response (or ``HTTPError``, which also carries
+            ``status`` and ``headers``).
+
+    Returns:
+        _Response: The status, content type, and parsed JSON body.
+    """
+    raw = response.read()
+
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError:
+        body = None
+
+    return _Response(response.status, response.headers.get_content_type(), body)
+
+
+def _narrate(label: str, response: _Response, width: int) -> str:
+    """Build a one-line summary of a request and its outcome.
+
+    Args:
+        label: The request, e.g. ``"GET /position?coords=POINT(0 0)"``.
+        response: The read response.
+        width: The label column width to pad to, so the status columns align.
+
+    Returns:
+        str: ``"<label> -> <status>  <summary>"``, where ``<summary>`` names the
+            coverage a success returned, or the reason an error was refused.
+    """
+    return f"{label:{width}} -> {response.status}  {_summary(response.body)}".rstrip()
+
+
+def _summary(body: Any) -> str:
+    """Summarize a response body for the narration: its coverage or its error.
+
+    Args:
+        body: A parsed response body (a coverage, an error object, or ``None``).
+
+    Returns:
+        str: for a coverage, its domain and size (e.g. ``"Grid (2 bands)"`` or
+            ``"MultiPoint (2 positions, 2 bands)"``); for an error, its ``detail``
+            message; empty for anything else.
+    """
+    if not isinstance(body, dict):
+        return ""
+
+    if body.get("type") != "Coverage":
+        return str(body.get("detail", ""))
+
+    domain = body.get("domain", {})
+    domain_type = domain.get("domainType", "?")
+    n_bands = len(body.get("ranges", {}))
+    size = [f"{n_bands} band{'s' if n_bands != 1 else ''}"]
+
+    if domain_type == "MultiPoint":
+        positions = domain.get("axes", {}).get("composite", {}).get("values", [])
+        size.insert(0, f"{len(positions)} position{'s' if len(positions) != 1 else ''}")
+
+    return f"{domain_type} ({', '.join(size)})"
+
+
+def _bbox_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the /bbox response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the Grid-specific content check.
+    Dispatches to the shared envelope check and the Grid-specific content check.
 
     Args:
-        response: The response to the /bbox CoverageJSON request.
+        response: The read /bbox CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _bbox_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _bbox_content_problems(response.body)
 
 
-def _position_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _position_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the /position response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the Point-specific content check.
+    Dispatches to the shared envelope check and the Point-specific content check.
 
     Args:
-        response: The response to the /position CoverageJSON request.
+        response: The read /position CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _position_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _position_content_problems(response.body)
 
 
-def _multipoint_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _multipoint_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the MULTIPOINT response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the MultiPoint-specific content check.
+    Dispatches to the shared envelope check and the MultiPoint content check.
 
     Args:
-        response: The response to the /position MULTIPOINT CoverageJSON request.
+        response: The read /position MULTIPOINT CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _multipoint_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _multipoint_content_problems(response.body)
 
 
-def _area_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _area_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the /area response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the Polygon-specific content check.
+    Dispatches to the shared envelope check and the Polygon-specific content
+    check.
 
     Args:
-        response: The response to the /area CoverageJSON request.
+        response: The read /area CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _area_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _area_content_problems(response.body)
 
 
 def _envelope_problems(status: int | None, content_type: str) -> Iterator[str]:
@@ -628,13 +710,11 @@ def _is_reduced_value(value: Any) -> bool:
     return isinstance(value, (int, float)) and 0.0 <= value <= N_SAMPLE_CELLS - 1
 
 
-def _bad_input_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _bad_input_problems(response: _Response) -> Iterator[str]:
     """Yield a mismatch unless a deliberately invalid request was a 400.
 
     Args:
-        response: The response to the deliberately invalid request.
+        response: The read response to the deliberately invalid request.
 
     Yields:
         One description when the status is not 400.
@@ -657,15 +737,14 @@ def _report(*problems: str) -> int:
     collected = list(problems)
 
     if not collected:
-        print(
-            "smoke check passed: CoverageJSON Grid, Point, and Polygon served; "
-            "bad input rejected as 400"
-        )
+        print()
+        print("✅ Smoke check PASSED!")
 
         return 0
 
     listing = "\n".join(f"  - {problem}" for problem in collected)
-    print(f"smoke check FAILED:\n{listing}", file=sys.stderr)
+    print()
+    print(f"❌ Smoke check FAILED:\n{listing}", file=sys.stderr)
 
     return 1
 
