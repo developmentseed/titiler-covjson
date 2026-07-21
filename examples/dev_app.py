@@ -14,7 +14,9 @@ runs from (the repository root, as above):
 
     curl "http://127.0.0.1:8137/bbox/-10,-5,10,5?url=docker/data/sample.tif"
     curl "http://127.0.0.1:8137/position?coords=POINT(0%200)&url=docker/data/sample.tif"
+    curl "http://127.0.0.1:8137/position?coords=MULTIPOINT((0%200),(1%201))&url=docker/data/sample.tif"
     curl "http://127.0.0.1:8137/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=docker/data/sample.tif"
+    curl "http://127.0.0.1:8137/area?coords=POLYGON((-10%20-5,10%20-5,10%205,-10%205,-10%20-5))&url=docker/data/sample.tif&stat=std"
 
 Or point ``url`` at any rio-tiler-readable dataset of your own: a local COG, or
 an ``http(s)://`` / ``s3://`` asset href (e.g., one pulled from a STAC item):

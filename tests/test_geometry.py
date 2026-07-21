@@ -6,7 +6,7 @@ import dataclasses
 
 import pytest
 
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 
 POSITION = Position(1.0, 2.0)
 # A square exterior ring (closed), no holes.
@@ -130,3 +130,49 @@ class TestPolygon:
         """Polygon is immutable."""
         with pytest.raises(dataclasses.FrozenInstanceError):
             SQUARE.rings = ()  # type: ignore[misc]
+
+
+class TestMultiPoint:
+    """Test the MultiPoint geometry value type."""
+
+    def test_single_position(self) -> None:
+        """One position is a valid multipoint."""
+        assert MultiPoint(positions=((1.0, 2.0),)).positions == ((1.0, 2.0),)
+
+    def test_positions_kept_in_order(self) -> None:
+        """Positions are preserved in the order given, not sorted or deduped."""
+        positions = ((3.0, 3.0), (1.0, 1.0), (2.0, 2.0))
+
+        assert MultiPoint(positions=positions).positions == positions
+
+    def test_empty_positions_raises(self) -> None:
+        """A multipoint with no positions is rejected."""
+        with pytest.raises(ValueError, match="at least one position"):
+            MultiPoint(positions=())
+
+    @pytest.mark.parametrize(
+        "bad",
+        [float("nan"), float("inf"), float("-inf")],
+        ids=("nan", "inf", "neg-inf"),
+    )
+    def test_non_finite_coordinate_raises(self, bad: float) -> None:
+        """A NaN or infinite coordinate is rejected at construction."""
+        with pytest.raises(ValueError, match="must be finite"):
+            MultiPoint(positions=((0.0, 0.0), (bad, 1.0)))
+
+    def test_duplicate_positions_raises(self) -> None:
+        """A repeated position is rejected: a coverage axis cannot index it twice."""
+        with pytest.raises(ValueError, match="unique"):
+            MultiPoint(positions=((0.0, 0.0), (1.0, 1.0), (0.0, 0.0)))
+
+    def test_negative_zero_and_zero_are_the_same_position(self) -> None:
+        """-0.0 and 0.0 collide as duplicates, matching the schema's uniqueness test."""
+        with pytest.raises(ValueError, match="unique"):
+            MultiPoint(positions=((0.0, 0.0), (-0.0, 0.0)))
+
+    def test_frozen(self) -> None:
+        """MultiPoint is immutable."""
+        mp = MultiPoint(positions=((1.0, 2.0),))
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            mp.positions = ()  # type: ignore[misc]

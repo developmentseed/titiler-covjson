@@ -1,10 +1,12 @@
 """End-to-end smoke check for the CoverageJSON container.
 
-Waits for the demo server, requests a CoverageJSON Grid (``/bbox``), Point
-(``/position``), and Polygon (``/area``) coverage for the bundled sample
-Cloud-Optimized GeoTIFF (COG), and asserts each response is a valid, non-empty
-CoverageJSON document. Runs on the host (via ``uv run``) so the image carries no
-test dependencies. Exits non-zero on any failure.
+Waits for the demo server, requests a CoverageJSON Grid (``/bbox``), Point and
+MultiPoint (``/position``), and Polygon (``/area``) coverage for the bundled
+sample Cloud-Optimized GeoTIFF (COG), and asserts each response is a valid,
+non-empty CoverageJSON document. Narrates each request, its status, and the
+coverage it returned, so a passing run shows what was served, not just a
+summary line. Runs on the host (via ``uv run``) so the image carries no test
+dependencies. Exits non-zero on any failure.
 
 Run against a container published on ``localhost:8000``:
 ``uv run python docker/smoke.py``.
@@ -20,7 +22,7 @@ from collections.abc import Iterator
 from http.client import HTTPResponse
 from math import prod
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import jsonschema
 
@@ -42,6 +44,12 @@ N_SAMPLE_CELLS = 24 * 24
 # valid ramp sample rather than a fixed value. The unit tests pin exact values on
 # an exact-pixel-size fixture instead.
 POSITION_COORDS = "POINT(0 0)"
+# Two interior positions sampled together on the same /position route return a
+# MultiPoint coverage: a composite tuple axis of the positions and a 1-D range
+# per band over it. The smoke asserts that shape, not exact values (the sampled
+# cells are platform dependent, as for POINT above).
+MULTIPOINT_COORDS = "MULTIPOINT((-5 -2), (5 2))"
+N_MULTIPOINT_POSITIONS = 2
 # A polygon over the whole sample extent reduces each band to one scalar. The
 # default statistic is the mean, which for the 0 .. 575 ramp lands inside the
 # ramp's range; the smoke asserts a finite in-range scalar rather than an exact
@@ -59,26 +67,60 @@ SCHEMA_PATH = (
 )
 
 
+class _Response(NamedTuple):
+    """A response read once into the parts the checks and narration both need.
+
+    The response body is a single-use stream, so it is read exactly once (into
+    ``body``) and shared, rather than each consumer re-reading it.
+
+    Attributes:
+        status: The HTTP status code, or ``None`` if the response exposes none.
+        content_type: The response content type (no charset parameter).
+        body: The parsed JSON body, or ``None`` when the body was not JSON.
+    """
+
+    status: int | None
+    content_type: str
+    body: Any
+
+
 def main() -> int:
     """Request the demo endpoints and assert valid, non-empty CoverageJSON.
 
-    Exercises all three routes (a ``/bbox`` Grid coverage, a ``/position`` Point
-    coverage, and an ``/area`` Polygon coverage), and sends one deliberately
-    invalid request (an unsupported ``f``) that must be a 400, proving the
-    container maps bad input through its mounted exception handlers instead of
-    letting it surface as a 500.
+    Exercises every route (a ``/bbox`` Grid coverage, a ``/position`` Point and
+    MultiPoint coverage, and an ``/area`` Polygon coverage), and sends one
+    deliberately invalid request (an unsupported ``f``) that must be a 400,
+    proving the container maps bad input through its mounted exception handlers
+    instead of letting it surface as a 500. Narrates each request and its
+    outcome along the way, so a passing run still shows what was served.
 
     Returns:
         Process exit code: 0 when every check passes, 1 otherwise.
     """
-    good_bbox = _get_when_ready(_bbox_url(BASE_BBOX_URL, "CoverageJSON"))
-    bad_bbox = _get(_bbox_url(BASE_BBOX_URL, "png"))
-    position = _get(_position_url(POSITION_COORDS))
-    area = _get(_area_url(AREA_COORDS))
+    good_bbox = _read(_get_when_ready(_bbox_url(BASE_BBOX_URL, "CoverageJSON")))
+    bad_bbox = _read(_get(_bbox_url(BASE_BBOX_URL, "png")))
+    position = _read(_get(_position_url(POSITION_COORDS)))
+    multipoint = _read(_get(_position_url(MULTIPOINT_COORDS)))
+    area = _read(_get(_area_url(AREA_COORDS)))
+
+    narrated = (
+        (f"GET /bbox/{BBOX}?f=CoverageJSON", good_bbox),
+        (f"GET /position?coords={POSITION_COORDS}", position),
+        (f"GET /position?coords={MULTIPOINT_COORDS}", multipoint),
+        (f"GET /area?coords={AREA_COORDS}", area),
+        (f"GET /bbox/{BBOX}?f=png", bad_bbox),
+    )
+    # Pad every label to the widest, so the "-> status" columns line up.
+    width = max(len(label) for label, _ in narrated)
+
+    for label, response in narrated:
+        summary = _summary(response.body)
+        print(f"{label:{width}} -> {response.status}  {summary}".rstrip())
 
     return _report(
         *_bbox_problems(good_bbox),
         *_position_problems(position),
+        *_multipoint_problems(multipoint),
         *_area_problems(area),
         *_bad_input_problems(bad_bbox),
     )
@@ -180,64 +222,118 @@ def _get(url: str) -> HTTPResponse | urllib.error.HTTPError:
         return http_error
 
 
-def _bbox_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _read(response: HTTPResponse | urllib.error.HTTPError) -> _Response:
+    """Read a raw response once into its status, content type, and parsed body.
+
+    The body is a single-use stream, so it is consumed here and the parsed value
+    shared by both the narration and the checks. A body that is not JSON (there
+    is none in a passing run) yields a ``None`` body rather than raising.
+
+    Args:
+        response: The raw HTTP response (or ``HTTPError``, which also carries
+            ``status`` and ``headers``).
+
+    Returns:
+        _Response: The status, content type, and parsed JSON body.
+    """
+    raw = response.read()
+
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError:
+        body = None
+
+    return _Response(response.status, response.headers.get_content_type(), body)
+
+
+def _summary(body: Any) -> str:
+    """Summarize a response body for the narration: its coverage or its error.
+
+    Args:
+        body: A parsed response body (a coverage, an error object, or ``None``).
+
+    Returns:
+        str: for a coverage, its domain and size (e.g. ``"Grid (2 bands)"`` or
+            ``"MultiPoint (2 positions, 2 bands)"``); for an error, its ``detail``
+            message; empty for anything else.
+    """
+    if not isinstance(body, dict):
+        return ""
+
+    if body.get("type") != "Coverage":
+        return str(body.get("detail", ""))
+
+    domain = body.get("domain", {})
+    domain_type = domain.get("domainType", "?")
+    n_bands = len(body.get("ranges", {}))
+    size = [f"{n_bands} band{'s' if n_bands != 1 else ''}"]
+
+    if domain_type == "MultiPoint":
+        positions = domain.get("axes", {}).get("composite", {}).get("values", [])
+        size.insert(0, f"{len(positions)} position{'s' if len(positions) != 1 else ''}")
+
+    return f"{domain_type} ({', '.join(size)})"
+
+
+def _bbox_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the /bbox response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the Grid-specific content check.
+    Dispatches to the shared envelope check and the Grid-specific content check.
 
     Args:
-        response: The response to the /bbox CoverageJSON request.
+        response: The read /bbox CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _bbox_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _bbox_content_problems(response.body)
 
 
-def _position_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _position_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the /position response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the Point-specific content check.
+    Dispatches to the shared envelope check and the Point-specific content check.
 
     Args:
-        response: The response to the /position CoverageJSON request.
+        response: The read /position CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _position_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _position_content_problems(response.body)
 
 
-def _area_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _multipoint_problems(response: _Response) -> Iterator[str]:
+    """Yield every envelope and content problem for the MULTIPOINT response.
+
+    Dispatches to the shared envelope check and the MultiPoint content check.
+
+    Args:
+        response: The read /position MULTIPOINT CoverageJSON response.
+
+    Yields:
+        A description of each envelope or content mismatch.
+    """
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _multipoint_content_problems(response.body)
+
+
+def _area_problems(response: _Response) -> Iterator[str]:
     """Yield every envelope and content problem for the /area response.
 
-    Reads the response once (the body is a single-use stream) and dispatches to
-    the shared envelope check and the Polygon-specific content check.
+    Dispatches to the shared envelope check and the Polygon-specific content
+    check.
 
     Args:
-        response: The response to the /area CoverageJSON request.
+        response: The read /area CoverageJSON response.
 
     Yields:
         A description of each envelope or content mismatch.
     """
-    body = json.loads(response.read())
-
-    yield from _envelope_problems(response.status, response.headers.get_content_type())
-    yield from _area_content_problems(body)
+    yield from _envelope_problems(response.status, response.content_type)
+    yield from _area_content_problems(response.body)
 
 
 def _envelope_problems(status: int | None, content_type: str) -> Iterator[str]:
@@ -435,6 +531,74 @@ def _scalar_value_problems(ranges: dict[str, Any]) -> Iterator[str]:
         yield f"position bands sample different cells: {sorted(set(sampled))}"
 
 
+def _multipoint_content_problems(body: dict[str, Any]) -> Iterator[str]:
+    """Yield any problem with the MultiPoint document's structure.
+
+    A schema-invalid body short-circuits: its structure is unreliable, so the
+    later structural checks would only add noise.
+
+    Args:
+        body: The parsed CoverageJSON MULTIPOINT /position response.
+
+    Yields:
+        A description of each mismatch; nothing when the document is a valid
+        MultiPoint coverage over the sampled positions.
+    """
+    try:
+        jsonschema.validate(body, json.loads(SCHEMA_PATH.read_text()))
+    except jsonschema.ValidationError as error:
+        yield f"multipoint schema invalid: {error.message}"
+
+        return
+
+    if (type_ := body.get("type")) != "Coverage":
+        yield f"multipoint type {type_!r} != 'Coverage'"
+
+    if (domain_type := body.get("domain", {}).get("domainType")) != "MultiPoint":
+        yield f"multipoint domain.domainType {domain_type!r} != 'MultiPoint'"
+
+    composite = body.get("domain", {}).get("axes", {}).get("composite", {})
+
+    if (data_type := composite.get("dataType")) != "tuple":
+        yield f"multipoint composite.dataType {data_type!r} != 'tuple'"
+
+    if (n := len(composite.get("values", []))) != N_MULTIPOINT_POSITIONS:
+        yield (
+            f"multipoint composite has {n} positions, expected {N_MULTIPOINT_POSITIONS}"
+        )
+
+    if ranges := body.get("ranges", {}):
+        yield from _composite_shape_problems(ranges)
+    else:
+        yield "multipoint ranges is empty"
+
+
+def _composite_shape_problems(ranges: dict[str, Any]) -> Iterator[str]:
+    """Yield a mismatch for any range that is not 1-D over the composite axis.
+
+    Each band of a MultiPoint coverage runs 1-D over ``composite``: one value per
+    position, so ``axisNames`` is ``["composite"]`` and ``shape`` is
+    ``[N_MULTIPOINT_POSITIONS]``.
+
+    Args:
+        ranges: The response ``ranges`` mapping of band name to NdArray.
+
+    Yields:
+        A description for each range whose axis labels or shape do not match.
+    """
+    for name, band in ranges.items():
+        if (axis_names := band.get("axisNames")) != ["composite"]:
+            yield (
+                f"multipoint range {name!r}: axisNames {axis_names!r} != ['composite']"
+            )
+
+        if (shape := band.get("shape")) != [N_MULTIPOINT_POSITIONS]:
+            yield (
+                f"multipoint range {name!r}: shape {shape!r} != "
+                f"[{N_MULTIPOINT_POSITIONS}]"
+            )
+
+
 def _is_ramp_value(value: Any) -> bool:
     """Return whether ``value`` is an integer ramp sample in the sample's range.
 
@@ -532,13 +696,11 @@ def _is_reduced_value(value: Any) -> bool:
     return isinstance(value, (int, float)) and 0.0 <= value <= N_SAMPLE_CELLS - 1
 
 
-def _bad_input_problems(
-    response: HTTPResponse | urllib.error.HTTPError,
-) -> Iterator[str]:
+def _bad_input_problems(response: _Response) -> Iterator[str]:
     """Yield a mismatch unless a deliberately invalid request was a 400.
 
     Args:
-        response: The response to the deliberately invalid request.
+        response: The read response to the deliberately invalid request.
 
     Yields:
         One description when the status is not 400.
@@ -561,15 +723,14 @@ def _report(*problems: str) -> int:
     collected = list(problems)
 
     if not collected:
-        print(
-            "smoke check passed: CoverageJSON Grid, Point, and Polygon served; "
-            "bad input rejected as 400"
-        )
+        print()
+        print("✅ Smoke check PASSED!")
 
         return 0
 
     listing = "\n".join(f"  - {problem}" for problem in collected)
-    print(f"smoke check FAILED:\n{listing}", file=sys.stderr)
+    print()
+    print(f"❌ Smoke check FAILED:\n{listing}", file=sys.stderr)
 
     return 1
 

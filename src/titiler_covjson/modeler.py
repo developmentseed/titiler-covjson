@@ -22,7 +22,12 @@ from titiler_covjson.helpers import (
     create_unit,
     numpy_dtype_to_ndarray,
 )
-from titiler_covjson.input import GridInput, PointInput, PolygonInput
+from titiler_covjson.input import (
+    GridInput,
+    MultiPointInput,
+    PointInput,
+    PolygonInput,
+)
 
 if TYPE_CHECKING:
     from covjson_pydantic.ndarray import (
@@ -43,15 +48,21 @@ if TYPE_CHECKING:
 # Axis labels for a gridded range, in row-major order: rows (y) then columns (x).
 _GRID_AXIS_NAMES = ("y", "x")
 
+# Axis label for a multipoint range: one value per position over the composite
+# axis, matching the domain's `composite` axis of positions.
+_MULTIPOINT_AXIS_NAMES = ("composite",)
+
 
 def to_coverage(coverage_input: CoverageInput) -> Coverage:
     """Convert a :class:`CoverageInput` to a CovJSON ``Coverage``.
 
     Dispatches on the concrete input variant via ``match``:
     :class:`~titiler_covjson.input.GridInput` becomes a Grid coverage,
-    :class:`~titiler_covjson.input.PointInput` a Point coverage, and
+    :class:`~titiler_covjson.input.PointInput` a Point coverage,
     :class:`~titiler_covjson.input.PolygonInput` a Polygon coverage (a scalar
-    zonal reduction over the polygon). Other domain variants (such as
+    zonal reduction over the polygon), and
+    :class:`~titiler_covjson.input.MultiPointInput` a MultiPoint coverage (one
+    value per band at each sampled position). Other domain variants (such as
     PointSeries) are not yet supported.
 
     Args:
@@ -140,13 +151,40 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
         ([], [])
         >>> cov.ranges["temp"].values
         [2.5]
+
+        A multipoint input becomes a MultiPoint coverage: a single ``composite``
+        axis holding one ``(x, y)`` per position and a 1-D range over that axis,
+        one value per position per band:
+
+        >>> from titiler_covjson.geometry import MultiPoint
+        >>> from titiler_covjson.input import MultiPointInput
+        >>> cov = to_coverage(
+        ...     MultiPointInput(
+        ...         data=np.ma.MaskedArray(
+        ...             np.array([[21.5, 22.5]], dtype="float32")
+        ...         ),
+        ...         geometry=MultiPoint(positions=((-5.0, 2.5), (-4.0, 3.5))),
+        ...         crs=rasterio.CRS.from_epsg(4326),
+        ...         bands=(BandInfo("temp", unit="Cel"),),
+        ...     )
+        ... )
+        >>> cov.domain.domainType.value
+        'MultiPoint'
+        >>> cov.domain.axes.composite.dataType
+        'tuple'
+        >>> cov.domain.axes.composite.values
+        [(-5.0, 2.5), (-4.0, 3.5)]
+        >>> cov.ranges["temp"].axisNames, cov.ranges["temp"].shape
+        (['composite'], [2])
+        >>> cov.ranges["temp"].values
+        [21.5, 22.5]
     """
     match coverage_input:
         case GridInput():
             return Coverage(
                 domain=_create_grid_domain(coverage_input),
                 parameters=_create_parameters(coverage_input),
-                ranges=_create_grid_ranges(coverage_input),
+                ranges=_create_ndarray_ranges(coverage_input, _GRID_AXIS_NAMES),
             )
         case PointInput():
             return Coverage(
@@ -159,6 +197,12 @@ def to_coverage(coverage_input: CoverageInput) -> Coverage:
                 domain=_create_polygon_domain(coverage_input),
                 parameters=_create_parameters(coverage_input),
                 ranges=_create_scalar_ranges(coverage_input),
+            )
+        case MultiPointInput():
+            return Coverage(
+                domain=_create_multipoint_domain(coverage_input),
+                parameters=_create_parameters(coverage_input),
+                ranges=_create_ndarray_ranges(coverage_input, _MULTIPOINT_AXIS_NAMES),
             )
         case _:  # pragma: no cover
             assert_never(coverage_input)
@@ -249,22 +293,32 @@ def _create_parameter(band: BandInfo) -> Parameter:
     )
 
 
-def _create_grid_ranges(coverage_input: GridInput) -> dict[str, RangeValue]:
-    """Build one range ``NdArray`` per band, keyed to match the parameters.
+def _create_ndarray_ranges(
+    coverage_input: GridInput | MultiPointInput,
+    axis_names: tuple[str, ...],
+) -> dict[str, RangeValue]:
+    """Build one N-D range ``NdArray`` per band, keyed to match the parameters.
+
+    Shared by the Grid and MultiPoint domains, whose per-band data is an array
+    over one or more axes (a 2-D grid, or a 1-D run over positions) rather than a
+    single scalar. ``axis_names`` labels those axes: ``("y", "x")`` for a grid,
+    ``("composite",)`` for a multipoint. Each band's ``data[i]`` keeps its own
+    rank, so the same builder serves both.
 
     Args:
-        coverage_input: The gridded input whose data becomes ranges.
+        coverage_input: The gridded or multipoint input whose data becomes ranges.
+        axis_names: Ordered axis labels for each range, matching the domain axes.
 
     Returns:
-        dict[str, RangeValue]: Range arrays keyed by band name, each shaped
-            ``[height, width]``.
+        dict[str, RangeValue]: Range arrays keyed by band name, each shaped to
+            ``data[i]`` and labeled with ``axis_names``.
     """
     # The i-th band describes data[i]: band order matches the data's leading
     # (band) axis. CoverageInput resolves `bands` at construction and guarantees
     # the counts match; this ordering is the contract the input converters build on.
     return {
         band.name: numpy_dtype_to_ndarray(
-            coverage_input.data[i], band.dtype, _GRID_AXIS_NAMES
+            coverage_input.data[i], band.dtype, axis_names
         )
         for i, band in enumerate(coverage_input.bands)
     }
@@ -331,6 +385,40 @@ def _create_polygon_domain(coverage_input: PolygonInput) -> Domain:
                 dataType="polygon",
                 coordinates=["x", "y"],
                 values=[coverage_input.geometry.rings],
+            ),
+        ),
+        referencing=[create_spatial_2d_reference(coverage_input.crs)],
+    )
+
+
+def _create_multipoint_domain(coverage_input: MultiPointInput) -> Domain:
+    """Build the MultiPoint ``Domain`` (a composite position axis plus referencing).
+
+    Args:
+        coverage_input: The multipoint input being converted.
+
+    Returns:
+        Domain: A MultiPoint domain whose ``composite`` axis holds the sampled
+            positions, one ``(x, y)`` tuple each, with 2-D spatial referencing.
+    """
+    # A MultiPoint domain uses a single `composite` axis carrying one (x, y) per
+    # position, tagged dataType "tuple". This inverts the Polygon domain's nesting:
+    # a Polygon wraps its one geometry (`values=[rings]`), whereas MultiPoint lists
+    # its N positions directly (`values=[[x, y], ...]`), so there is no extra wrap.
+    # `coordinates` names the tuple components and is constant ("x", "y") because
+    # positions are always stored x (longitude/easting) then y (latitude/northing).
+    # This must NOT be forced to match the CRS axis order in `referencing` (which
+    # is ["y", "x"] for a latitude-first CRS such as EPSG:4326): the two arrays
+    # describe different things (position layout vs CRS axis order), and unifying
+    # them would make a strict consumer read a stored [lon, lat] position as
+    # [lat, lon]. See create_spatial_2d_reference for the referencing side.
+    return Domain(
+        domainType=DomainType.multi_point,
+        axes=Axes(
+            composite=ValuesAxis[tuple[float, float]](
+                dataType="tuple",
+                coordinates=["x", "y"],
+                values=list(coverage_input.geometry.positions),
             ),
         ),
         referencing=[create_spatial_2d_reference(coverage_input.crs)],

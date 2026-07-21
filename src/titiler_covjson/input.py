@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 from titiler_covjson.reduce import Stat, reduce_each_band
 
 if TYPE_CHECKING:
@@ -305,11 +305,73 @@ class PolygonInput(_CoverageInputBase):
             raise ValueError(msg)
 
 
-# Alias for the per-domain input union. GridInput, PointInput, and PolygonInput
-# are members; the modeler's `match` dispatches on each, and `assert_never` in
-# its default arm enforces exhaustiveness as further variants (e.g.,
-# PointSeriesInput) join.
-CoverageInput = GridInput | PointInput | PolygonInput
+@dataclass(frozen=True, eq=False, kw_only=True)
+class MultiPointInput(_CoverageInputBase):
+    """MultiPoint (many positions, one value per band per position) domain input.
+
+    ``data`` is a 2-D masked array shaped ``(bands, positions)``: one sampled
+    value per band at each position, with the position axis aligned to
+    ``geometry.positions`` in order. ``geometry`` gives the sampled positions in
+    ``crs``. This is the variant :func:`pointdata_to_multipoint_input` produces
+    from a per-position sequence of rio-tiler ``PointData`` reads. A masked entry
+    marks a band with no value at that position (outside the dataset, or nodata),
+    which serializes as ``null``.
+
+    Attributes:
+        geometry: The sampled positions, in ``crs``.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from titiler_covjson.geometry import MultiPoint
+        >>> cov = MultiPointInput(
+        ...     data=np.ma.MaskedArray(np.array([[1.5, 2.5]], dtype="float32")),
+        ...     geometry=MultiPoint(positions=((-5.0, 2.5), (-4.0, 3.5))),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ...     bands=(BandInfo("b1", unit="mm"),),
+        ... )
+        >>> cov.data.shape
+        (1, 2)
+        >>> len(cov.geometry.positions)
+        2
+    """
+
+    geometry: MultiPoint
+
+    def _validate_shape(self) -> None:
+        """Require 2-D ``(bands, positions)`` data aligned to the geometry.
+
+        The ``ndim`` check precedes the position-count check on purpose: the
+        latter indexes ``data.shape[1]``, which a non-2-D array does not have, so
+        checking dimensionality first turns a 1-D array into this ``ValueError``
+        rather than an ``IndexError``.
+
+        Raises:
+            ValueError: If ``data`` is not 2-D, or its position axis length does
+                not match the number of positions in ``geometry``.
+        """
+        if self.data.ndim != 2:
+            msg = (
+                "MultiPoint data must have shape (bands, positions); "
+                f"got {self.data.ndim} dimensions"
+            )
+            raise ValueError(msg)
+
+        n_positions = len(self.geometry.positions)
+
+        if self.data.shape[1] != n_positions:
+            msg = (
+                f"Number of positions ({n_positions}) does not match "
+                f"data.shape[1] ({self.data.shape[1]})"
+            )
+            raise ValueError(msg)
+
+
+# Alias for the per-domain input union. GridInput, PointInput, PolygonInput, and
+# MultiPointInput are members; the modeler's `match` dispatches on each, and
+# `assert_never` in its default arm enforces exhaustiveness as further variants
+# (e.g., PointSeriesInput) join.
+CoverageInput = GridInput | PointInput | PolygonInput | MultiPointInput
 
 
 def band_info_from_reader_info(info: Info) -> list[BandInfo]:
@@ -754,5 +816,87 @@ def imagedata_to_polygon_input(
         data=reduced,
         geometry=geometry,
         crs=resolved_crs,
+        bands=typed_bands,
+    )
+
+
+def pointdata_to_multipoint_input(
+    points: Sequence[PointData | None],
+    *,
+    geometry: MultiPoint,
+    bands: Sequence[BandInfo],
+    crs: rasterio.CRS,
+) -> MultiPointInput:
+    """Assemble per-position ``PointData`` reads into a :class:`MultiPointInput`.
+
+    This is the converter used by a multi-position sample: each position is read
+    independently, so a position outside the dataset yields no ``PointData`` and
+    reaches here as ``None``. Every read contributes one ``(bands,)`` column and a
+    ``None`` contributes an all-masked column, so each position aligns to one slot
+    in the ``(bands, positions)`` result and an out-of-bounds position serializes
+    as ``null`` rather than dropping out.
+
+    Unlike the single-point converter, ``bands`` and ``crs`` are required: the
+    all-out-of-bounds case has no read to derive either from, so the caller
+    resolves both up front (band names and dtype from any successful read, or from
+    the dataset info when none succeeded) and passes them in.
+
+    The band dtype is stamped from the stacked array, not from ``bands`` or one
+    read: stacking an integer read beside a synthesized masked column can promote
+    the dtype, so the declared range type must equal the array actually serialized.
+    This mirrors :func:`imagedata_to_polygon_input`, which likewise takes its dtype
+    from the array it produces.
+
+    Args:
+        points: One entry per position, in order: the read where the position was
+            sampled, or ``None`` where it fell outside the dataset.
+        geometry: The sampled positions, in ``crs``. Its length must match
+            ``points``; :class:`MultiPointInput` enforces the alignment.
+        bands: Complete per-band metadata, resolved by the caller.
+        crs: The CRS to label the coverage with.
+
+    Returns:
+        MultiPointInput: The intermediate representation of the sampled positions.
+
+    Examples:
+        >>> import numpy as np
+        >>> import rasterio
+        >>> from rio_tiler.models import PointData
+        >>> from titiler_covjson.geometry import MultiPoint
+        >>> p0 = PointData(np.ma.MaskedArray(np.array([1.5], dtype="float32")))
+        >>> cov = pointdata_to_multipoint_input(
+        ...     [p0, None],
+        ...     geometry=MultiPoint(positions=((-5.0, 2.5), (-4.0, 3.5))),
+        ...     bands=(BandInfo("b1"),),
+        ...     crs=rasterio.CRS.from_epsg(4326),
+        ... )
+        >>> cov.data.shape
+        (1, 2)
+        >>> cov.data.tolist()   # the out-of-bounds position is null
+        [[1.5, None]]
+    """
+    n_bands = len(bands)
+
+    # Each position is one (bands,) column: the read's own array, or an all-masked
+    # column for a position that fell outside the dataset. The masked column takes
+    # the band dtype (np.ma.masked_all defaults to float64, which would promote an
+    # integer read on stacking); stacking along a new position axis then gives
+    # (bands, positions).
+    columns = [
+        point.array
+        if point is not None
+        else np.ma.masked_all((n_bands,), dtype=bands[0].dtype)  # type: ignore[no-untyped-call, unused-ignore]
+        for point in points
+    ]
+    data = np.ma.stack(columns, axis=1)
+
+    # Stamp every band's dtype from the stacked array, so the declared range type
+    # equals the values it serializes even when a masked column promoted the dtype.
+    typed_bands = tuple(replace(band, dtype=data.dtype) for band in bands)
+
+    return MultiPointInput(
+        data=data,
+        geometry=geometry,
+        crs=crs,
         bands=typed_bands,
     )
