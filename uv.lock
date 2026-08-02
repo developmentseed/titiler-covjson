@@ -1683,7 +1683,7 @@ wheels = [
 
 [[package]]
 name = "rio-tiler"
-version = "9.4.0"
+version = "9.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -1699,9 +1699,9 @@ dependencies = [
     { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "typing-extensions", marker = "python_full_version < '3.15'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/e9/f5c6516866f18a1fcad23cef8bbf29d9006d14714b2c8c8dac758c6a4c73/rio_tiler-9.4.0.tar.gz", hash = "sha256:e9872746181097ff2eac68270069459f98d93e82390419d14798ece135759ed1", size = 212213, upload-time = "2026-07-02T16:08:50.475Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/ae/5721191854ffd8410f39ac4380818975337b84e01753b3b5cc2b4c38d0c8/rio_tiler-9.4.2.tar.gz", hash = "sha256:0c0fd217b68d17cb71c79b6bf3350c36c2927096fff7352e7c06f1ce5e57d528", size = 212352, upload-time = "2026-07-20T16:20:33.643Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/e9/9fda5bfb9c6cb198a8187740cd4575c6871b966f02cda696a3c43bfa3986/rio_tiler-9.4.0-py3-none-any.whl", hash = "sha256:fd73107b21d3fd7b93214b69eb67ba1359653388e5ff54c7a848281b3a886a1a", size = 315956, upload-time = "2026-07-02T16:08:48.77Z" },
+    { url = "https://files.pythonhosted.org/packages/02/26/e5d5a1eaa4b48d17fe8780ba215a8cd5348b4cef3e081bf4647cfbb63bc2/rio_tiler-9.4.2-py3-none-any.whl", hash = "sha256:2f9814072a6483209bcb808fd0de7e7050e803d6186f5625d5a3cc33dc32d873", size = 316063, upload-time = "2026-07-20T16:20:31.733Z" },
 ]
 
 [[package]]
