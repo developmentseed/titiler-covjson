@@ -137,8 +137,13 @@ jobs:
       - name: Install dependencies (lowest-direct floors)
         if: matrix.resolution == 'lowest-direct'
         run: uv sync --resolution lowest-direct --quiet
+      # `--no-sync` is load-bearing on the lowest-direct leg: `uv run` otherwise
+      # syncs the environment to the lockfile first, silently replacing the
+      # floors the previous step just installed, so the leg tested the locked
+      # versions twice and no floor could ever turn it red. Harmless on the
+      # highest leg, whose environment the lockfile sync already established.
       - name: Run tests (pytest)
-        run: uv run --quiet pytest
+        run: uv run --no-sync --quiet pytest
 
   # Coverage on the minimum supported Python (one canonical number, no matrix
   # gating). No API key: the text report goes to the job log and a markdown
