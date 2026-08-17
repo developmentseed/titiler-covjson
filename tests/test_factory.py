@@ -1118,29 +1118,40 @@ def test_position_multipoint_rejects_malformed_coords(
     assert response.status_code == 400, response.text
 
 
-def test_position_multipoint_nodata_edge_read_is_a_known_error(
+def test_position_multipoint_nodata_edge_read_returns_the_edge_pixel(
     client: TestClient, tiny_cog_path: str
 ) -> None:
-    """A last-row/column position read with nodata currently errors (upstream bug).
+    """A last-row/column position read with nodata returns that pixel's value.
 
-    This is the one hole in the "an out-of-bounds position becomes null, not an
-    error" contract: a position in the dataset's last row or column, read with
-    ``nodata`` set, trips a rio-tiler off-by-one that flags the edge-aligned read
-    window boundless. A WarpedVRT then refuses it, and the ValueError propagates
-    (an unhandled 500 in a deployment) rather than nulling that one position.
-    Pinned to the current behavior so it flags when the upstream fix lands (issue
-    #73, upstream cogeotiff/rio-tiler#966).
+    This closes the one hole that used to exist in the "an out-of-bounds position
+    becomes null, not an error" contract: a position in the dataset's last row or
+    column, read with ``nodata`` set, once tripped a reader off-by-one that
+    flagged the edge-aligned read window boundless and escaped as a 500. Such a
+    position now reads like any other, so every in-bounds position yields a value
+    and only out-of-bounds ones become null.
     """
-    # (5, -2.5) is the center of tiny_cog's bottom-right pixel: last row and column.
-    with pytest.raises(ValueError, match="boundless"):
-        client.get(
-            "/position",
-            params={
-                "url": tiny_cog_path,
-                "coords": "MULTIPOINT((5 -2.5))",
-                "nodata": 0,
-            },
-        )
+    # (5, -2.5) is the center of tiny_cog's bottom-right pixel: last row and
+    # column. Band 1 is arange(4) reshaped 2x2, so that pixel holds 3, and band 2
+    # copies band 1 apart from its top-left nodata sentinel.
+    #
+    # The off-by-one was fixed upstream in rio-tiler 9.4.2
+    # (cogeotiff/rio-tiler#966), which the lockfile pins, and independently in
+    # rasterio 1.5.1, which the lowest-direct resolution picks up alongside the
+    # rio-tiler floor. Both resolutions therefore read the pixel.
+    response = client.get(
+        "/position",
+        params={
+            "url": tiny_cog_path,
+            "coords": "MULTIPOINT((5 -2.5))",
+            "nodata": 0,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+
+    ranges = response.json()["ranges"]
+    assert ranges["b1"]["values"] == [3.0]
+    assert ranges["b2"]["values"] == [3.0]
 
 
 def test_resolve_unread_bands_derives_from_info_without_a_read() -> None:

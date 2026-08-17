@@ -577,10 +577,7 @@ def _read_multipoint(
                     )
                 )
             # Only an out-of-bounds position becomes a null value; any other reader
-            # error still propagates. One such error is the hole in the
-            # null-not-an-error contract: a last-row/column position read with
-            # nodata trips a rio-tiler off-by-one and escapes as a 500 (tracked in
-            # issue #73, upstream cogeotiff/rio-tiler#966).
+            # error still propagates.
             except PointOutsideBounds:
                 samples.append(None)
 
