@@ -64,10 +64,14 @@ def index() -> dict[str, object]:
         dict[str, object]: A pointer to ``/docs``, the registered endpoint path
             templates, and the bundled sample COG usable as ``url``.
     """
+    # `APIRoute.methods` is optional in newer Starlette releases, so treat an
+    # unset value as "no methods" rather than indexing into None.
     endpoints = sorted(
         route.path
         for route in app.routes
-        if isinstance(route, APIRoute) and "GET" in route.methods and route.path != "/"
+        if isinstance(route, APIRoute)
+        and "GET" in (route.methods or ())
+        and route.path != "/"
     )
 
     return {"docs": "/docs", "endpoints": endpoints, "sample_url": SAMPLE_URL}
