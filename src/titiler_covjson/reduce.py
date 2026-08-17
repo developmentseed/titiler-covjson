@@ -150,7 +150,10 @@ def reduce_each_band(
         case Stat.MEAN:
             reduced = np.ma.mean(flat, axis=1)
         case Stat.MEDIAN:
-            reduced = np.ma.median(flat, axis=1)  # type: ignore[no-untyped-call]
+            # numpy < 2.5 leaves np.ma.median untyped, so the call needs an
+            # ignore there; 2.5 annotates it, which makes that ignore unused.
+            # Both Pythons are in the support matrix, so silence both directions.
+            reduced = np.ma.median(flat, axis=1)  # type: ignore[no-untyped-call, unused-ignore]
         case Stat.STD:
             reduced = np.ma.std(flat, axis=1)
         case Stat.SUM:
