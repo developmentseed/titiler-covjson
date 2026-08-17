@@ -27,9 +27,11 @@ dependencies = [
     # Targets titiler.core's 2.x factory and dependency-injection API; <3.0
     # guards the next breaking major.
     "titiler.core>=2.0,<3.0",
-    # 9.0.1 fixes band selection by index (9.0.0 returns the first band
-    # regardless of the requested index); <10.0 guards the next major.
-    "rio-tiler>=9.0.1,<10.0",
+    # 9.4.1 fixes two point-read bugs: an expression over a nodata band now
+    # masks (nulls) rather than fabricating a value, and an edge-aligned read
+    # window is no longer misflagged boundless, which broke last row/column
+    # reads when nodata is set. <10.0 guards the next major.
+    "rio-tiler>=9.4.1,<10.0",
     # 0.8.0 is the first release providing the Polygon domain models; <1.0
     # guards the still-evolving pre-1.0 model surface.
     "covjson-pydantic>=0.8.0,<1.0",

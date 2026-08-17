@@ -2546,7 +2546,7 @@ requires-dist = [
     { name = "covjson-pydantic", specifier = ">=0.8.0,<1.0" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pyproj", specifier = ">=3.4.0,<4.0" },
-    { name = "rio-tiler", specifier = ">=9.0.1,<10.0" },
+    { name = "rio-tiler", specifier = ">=9.4.1,<10.0" },
     { name = "titiler-core", specifier = ">=2.0,<3.0" },
     { name = "ucumvert", specifier = ">=0.3.0" },
 ]
