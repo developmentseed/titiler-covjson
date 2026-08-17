@@ -838,6 +838,32 @@ def test_position_selects_bands_by_expression(
     assert body["ranges"]["b1/b2"]["values"] == [1.0]
 
 
+def test_position_expression_over_nodata_serializes_as_null(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # POINT(-5 2.5) hits the top-left pixel: band 1 is 0.0 and band 2 is nodata.
+    # rio-tiler masks a point expression across every band the read covered, so
+    # both derived bands are null: b1+b2 because a contributor is missing, and
+    # b1 because the mask unions across the read bands (the same rule
+    # test_bbox_selects_bands_by_expression documents for a grid read). Before
+    # rio-tiler 9.4.1 the point path dropped the mask entirely
+    # (cogeotiff/rio-tiler#965) and reported arithmetic on the nodata sentinel
+    # as a genuine measurement.
+    response = client.get(
+        "/position",
+        params={
+            "url": tiny_cog_path,
+            "coords": "POINT(-5 2.5)",
+            "expression": "b1;b1+b2",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body["parameters"]) == {"b1", "b1+b2"}
+    assert body["ranges"]["b1"]["values"] == [None]
+    assert body["ranges"]["b1+b2"]["values"] == [None]
+
+
 @pytest.mark.parametrize("bidx", [5, 0], ids=["above-range", "below-range"])
 def test_position_rejects_out_of_range_band_index(
     client: TestClient, cog_path: str, bidx: int
@@ -1057,6 +1083,28 @@ def test_position_multipoint_selects_bands_by_expression(
     assert body["ranges"]["b1+b2"]["shape"] == [2]
 
 
+def test_position_multipoint_expression_over_nodata_nulls_that_position(
+    client: TestClient, tiny_cog_path: str
+) -> None:
+    # Masking is per position, not per request. The first position is the
+    # top-left pixel, where band 2 is nodata, so its b1+b2 is null; the second
+    # is the bottom-right pixel (both bands 3.0), which still carries 6.0. Each
+    # position is its own read, so this is the per-position form of the
+    # fabricated-value bug the MULTIPOINT input would otherwise inherit once per
+    # masked position.
+    response = client.get(
+        "/position",
+        params={
+            "url": tiny_cog_path,
+            "coords": "MULTIPOINT((-5 2.5), (5 -2.5))",
+            "expression": "b1+b2",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ranges"]["b1+b2"]["values"] == [None, 6.0]
+
+
 def test_position_multipoint_exceeds_max_samples(
     small_samples_client: TestClient, cog_path: str
 ) -> None:
@@ -1134,10 +1182,9 @@ def test_position_multipoint_nodata_edge_read_returns_the_edge_pixel(
     # column. Band 1 is arange(4) reshaped 2x2, so that pixel holds 3, and band 2
     # copies band 1 apart from its top-left nodata sentinel.
     #
-    # The off-by-one was fixed upstream in rio-tiler 9.4.2
-    # (cogeotiff/rio-tiler#966), which the lockfile pins, and independently in
-    # rasterio 1.5.1, which the lowest-direct resolution picks up alongside the
-    # rio-tiler floor. Both resolutions therefore read the pixel.
+    # The off-by-one was fixed upstream in rio-tiler 9.4.1
+    # (cogeotiff/rio-tiler#966), which the declared floor now requires, so every
+    # resolution CI tests reads the pixel.
     response = client.get(
         "/position",
         params={
