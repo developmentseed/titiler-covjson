@@ -1182,10 +1182,9 @@ def test_position_multipoint_nodata_edge_read_returns_the_edge_pixel(
     # column. Band 1 is arange(4) reshaped 2x2, so that pixel holds 3, and band 2
     # copies band 1 apart from its top-left nodata sentinel.
     #
-    # The off-by-one was fixed upstream in rio-tiler 9.4.2
-    # (cogeotiff/rio-tiler#966), which the lockfile pins, and independently in
-    # rasterio 1.5.1, which the lowest-direct resolution picks up alongside the
-    # rio-tiler floor. Both resolutions therefore read the pixel.
+    # The off-by-one was fixed upstream in rio-tiler 9.4.1
+    # (cogeotiff/rio-tiler#966), which the declared floor now requires, so every
+    # resolution CI tests reads the pixel.
     response = client.get(
         "/position",
         params={
