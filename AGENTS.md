@@ -198,7 +198,13 @@ substitutes, and `Depends` is reserved for leaf request concerns.
 - Line breaks: wrap git commit messages by the standard convention (subject ~50
   chars, body ~72); do not hard-wrap text in GitHub issues and pull requests
   unless specifically required (let it soft-wrap); hard-wrap Markdown documents
-  at 80 characters.
+  at 80 characters. A Markdown file whose contents *become* a GitHub issue or
+  pull request body follows the issue rule, not the document rule: GitHub
+  renders bodies with hard line breaks, so an 80-column wrap that is invisible
+  in the repo shows up as ragged text in the created issue. Name those files
+  `*-issue-body.md` (e.g., `.github/lockfile-refresh-issue-body.md`), keep them
+  to one line per paragraph, and leave them soft-wrapped; `.editorconfig` turns
+  `max_line_length` off for that pattern.
 - Fenced code blocks: always give the fence a language. When a block has no
   specific or obvious language (e.g., monospaced plain text or an ASCII
   diagram), mark it `text` rather than leaving the fence bare.

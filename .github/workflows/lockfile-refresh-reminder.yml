@@ -46,7 +46,9 @@ jobs:
             --json number --jq 'length')
           echo "open=$open" >> "$GITHUB_OUTPUT"
       # The dry run writes no lockfile; its output just tells the reader what
-      # this quarter's refresh would take.
+      # this quarter's refresh would take. The runbook is soft-wrapped at the
+      # source because GitHub renders issue bodies with hard line breaks, so it
+      # is concatenated verbatim; do not reflow it here.
       - name: Compose the issue body
         if: steps.existing.outputs.open == '0'
         run: |
@@ -57,7 +59,7 @@ jobs:
             uv lock --upgrade --dry-run 2>&1 || true
             echo '```'
             echo
-            cat .github/lockfile-refresh.md
+            cat .github/lockfile-refresh-issue-body.md
           } > body.md
       - name: Open the reminder issue
         if: steps.existing.outputs.open == '0'

@@ -16,6 +16,15 @@ indent_style = space
 [*.py]
 indent_size = 4
 
+[*.md]
+max_line_length = 80
+
+# Files whose contents become a GitHub issue or pull request body: GitHub
+# renders those with hard line breaks, so wrapping them would be visible in the
+# rendered issue. They soft-wrap, one line per paragraph.
+[.github/*-issue-body.md]
+max_line_length = off
+
 [*.sh]
 indent_size = 2
 # shfmt-specific key: indent `case` alternatives (the Google Shell Style rule,
