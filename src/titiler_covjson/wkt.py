@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 
 # WKT for a point: `POINT`, an optional Z/M/ZM tag, then whitespace-separated
 # coordinates in parentheses. parse_point_wkt inspects the tag and coordinate
@@ -50,6 +50,18 @@ _POLYGON_WKT = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _POLYGON_RING = re.compile(r"\(([^()]*)\)")
+
+# WKT for a multipoint: `MULTIPOINT`, an optional Z/M/ZM tag, then the point list
+# in parentheses. parse_multipoint_wkt inspects the tag and strips the per-point
+# parentheses (WKT permits both `((x y), (x y))` and `(x y, x y)`) so both reduce
+# to the one `x y, x y, ...` grammar. POINT fails this pattern (no leading
+# `MULTI`) and MULTIPOINT fails _POINT_WKT (anchored on `POINT`), so the two are
+# disjoint; `MULTIPOINT EMPTY` fails it too (no parentheses), which is the
+# rejection.
+_MULTIPOINT_WKT = re.compile(
+    r"^\s*MULTIPOINT\s*(?P<tag>Z|M|ZM)?\s*\((?P<points>.*)\)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -209,6 +221,112 @@ def parse_polygon_wkt(coords: str) -> Polygon | InvalidCoords:
         return Polygon(rings=tuple(map(_parse_xy_pairs, ring_strings)))
     except ValueError as exc:
         return InvalidCoords(f"Invalid polygon {coords!r}: {exc}")
+
+
+def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
+    """Parse a 2-D WKT ``MULTIPOINT`` into a :class:`MultiPoint`.
+
+    Accepts both WKT spellings of a multipoint, ``MULTIPOINT((x y), (x y), ...)``
+    and ``MULTIPOINT(x y, x y, ...)``, and even a mix of the two; the per-point
+    parentheses are stripped so both reduce to one ``x y, x y`` grammar, handing
+    the vertices to :class:`MultiPoint`, which owns the set invariants (at least
+    one position, finite, distinct). Everything else yields an
+    :class:`InvalidCoords`:
+
+    - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a point with
+      three or four coordinates): the 2-D raster backing cannot sample a vertical
+      level, so echoing the coordinate back or dropping it would both be dishonest;
+    - a non-MULTIPOINT geometry, ``MULTIPOINT EMPTY``, an empty point list, a
+      non-finite or non-numeric coordinate, a repeated position, or any other
+      malformed input.
+
+    Args:
+        coords: The raw ``coords`` query value.
+
+    Returns:
+        MultiPoint | InvalidCoords: The parsed positions, or why they were refused.
+
+    Examples:
+        >>> parse_multipoint_wkt("MULTIPOINT((0 0), (1 1))").positions
+        ((0.0, 0.0), (1.0, 1.0))
+        >>> parse_multipoint_wkt("MULTIPOINT(0 0, 1 1)").positions
+        ((0.0, 0.0), (1.0, 1.0))
+
+        A repeated position is refused, which :class:`MultiPoint` itself catches:
+
+        >>> parse_multipoint_wkt("MULTIPOINT((0 0), (0 0))")
+        InvalidCoords(message="Invalid multipoint 'MULTIPOINT((0 0), (0 0))': ...")
+    """
+    if (match := _MULTIPOINT_WKT.match(coords)) is None:
+        return InvalidCoords(
+            f"Invalid multipoint {coords!r}: expected WKT MULTIPOINT((x y), ...), "
+            "e.g., MULTIPOINT((0 0), (1 1))."
+        )
+
+    # Rejected for the reason given at the same guard in parse_point_wkt.
+    if match["tag"]:
+        return InvalidCoords(
+            "Vertical or measured coordinates are not supported: this endpoint "
+            f"samples a single 2-D raster. Provide a 2-D MULTIPOINT; got {coords!r}."
+        )
+
+    # Strip the per-point parentheses so `((x y), (x y))` and `(x y, x y)` reduce
+    # to the one `x y, x y, ...` grammar _parse_xy_pairs reads. A strip, not a
+    # findall of parenthesized groups: a mixed `MULTIPOINT((0 0), 1 1)` is
+    # unambiguous, and a findall would silently drop the bare point. Paren
+    # structure itself is not validated (an unbalanced one is read leniently).
+    body = match["points"].replace("(", " ").replace(")", " ")
+
+    # _parse_xy_pairs rejects a non-2-D or non-numeric point and MultiPoint rejects
+    # an empty, non-finite, or duplicate set; one handler covers every ValueError.
+    # MultiPoint owns the set invariants as the single source of truth, and its
+    # message carries through verbatim (mirroring parse_point_wkt and Position).
+    try:
+        return MultiPoint(positions=_parse_xy_pairs(body))
+    except ValueError as exc:
+        return InvalidCoords(f"Invalid multipoint {coords!r}: {exc}")
+
+
+def parse_position_coords(coords: str) -> Position | MultiPoint | InvalidCoords:
+    """Parse the ``coords`` of a position request: a ``POINT`` or ``MULTIPOINT``.
+
+    The single entry point the position endpoint dispatches on: a ``POINT`` yields
+    a :class:`Position`, a ``MULTIPOINT`` a :class:`MultiPoint`, and anything else
+    an :class:`InvalidCoords` naming both accepted forms. A well-formed ``POINT``
+    or ``MULTIPOINT`` that is nonetheless unusable (a 3-D tag, a duplicate
+    position) surfaces that grammar's own specific message.
+
+    Named for the ``coords`` parameter it reads rather than a single grammar: it
+    dispatches over the two geometries the verb accepts, so it is not one more
+    ``parse_*_wkt`` sibling.
+
+    Args:
+        coords: The raw ``coords`` query value.
+
+    Returns:
+        Position | MultiPoint | InvalidCoords: The parsed geometry, or why it was
+            refused.
+
+    Examples:
+        >>> parse_position_coords("POINT(0 0)")
+        Position(x=0.0, y=0.0, z=None)
+        >>> parse_position_coords("MULTIPOINT((0 0), (1 1))").positions
+        ((0.0, 0.0), (1.0, 1.0))
+
+        A geometry that is neither names both accepted forms:
+
+        >>> parse_position_coords("POLYGON((0 0, 1 0, 1 1, 0 0))")
+        InvalidCoords(message="Invalid coords 'POLYGON((0 0, 1 0, 1 1, 0 0))': ...")
+    """
+    if _MULTIPOINT_WKT.match(coords):
+        return parse_multipoint_wkt(coords)
+
+    if _POINT_WKT.match(coords):
+        return parse_point_wkt(coords)
+
+    return InvalidCoords(
+        f"Invalid coords {coords!r}: expected WKT POINT(x y) or MULTIPOINT((x y), ...)."
+    )
 
 
 def _parse_xy_pairs(ring: str) -> tuple[tuple[float, float], ...]:

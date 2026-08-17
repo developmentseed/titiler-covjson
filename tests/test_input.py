@@ -10,15 +10,17 @@ import pytest
 import rasterio
 from rio_tiler.models import ImageData, Info, PointData
 
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 from titiler_covjson.input import (
     BandInfo,
     GridInput,
+    MultiPointInput,
     PointInput,
     PolygonInput,
     band_info_from_reader_info,
     imagedata_to_grid_input,
     imagedata_to_polygon_input,
+    pointdata_to_multipoint_input,
     pointdata_to_point_input,
 )
 from titiler_covjson.reduce import Stat
@@ -28,6 +30,9 @@ CRS_EPSG_3857 = rasterio.CRS.from_epsg(3857)
 POSITION = Position(1.0, 2.0)
 # A unit square exterior ring (closed), no holes.
 SQUARE = Polygon(rings=(((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)),))
+# Three positions, so a (bands, positions) shape reads unambiguously in tests.
+POSITIONS = MultiPoint(positions=((0.0, 0.0), (1.0, 1.0), (2.0, 2.0)))
+POSITIONS_2 = MultiPoint(positions=((0.0, 0.0), (1.0, 1.0)))
 
 
 def make_image(
@@ -107,6 +112,21 @@ def polygon_input(data: np.ma.MaskedArray[Any, np.dtype[Any]]) -> PolygonInput:
         PolygonInput: An input with a default polygon geometry and CRS.
     """
     return PolygonInput(data=data, geometry=SQUARE, crs=CRS_EPSG_3857)
+
+
+def multipoint_input(
+    data: np.ma.MaskedArray[Any, np.dtype[Any]],
+) -> MultiPointInput:
+    """Build a minimal MultiPointInput around the given array.
+
+    Args:
+        data: The masked data array, shaped ``(bands, positions)`` over the
+            three-position :data:`POSITIONS` geometry.
+
+    Returns:
+        MultiPointInput: An input with a default multipoint geometry and CRS.
+    """
+    return MultiPointInput(data=data, geometry=POSITIONS, crs=CRS_EPSG_3857)
 
 
 class TestBandInfo:
@@ -597,6 +617,79 @@ class TestPolygonInput:
             cov.data = np.ma.MaskedArray(np.zeros(2))  # type: ignore[misc]
 
 
+class TestMultiPointInput:
+    """Test the MultiPointInput dataclass."""
+
+    def test_minimal_construction(self) -> None:
+        """A 2-D (bands, positions) array with a geometry and CRS is sufficient."""
+        cov = multipoint_input(np.ma.MaskedArray(np.zeros((2, 3))))
+
+        # bands is resolved at construction, so it is never empty afterwards.
+        assert [band.name for band in cov.bands] == ["b1", "b2"]
+        assert cov.data.shape == (2, 3)
+        assert cov.geometry == POSITIONS
+        assert cov.collection_id is None
+        assert cov.item_ids is None
+
+    @pytest.mark.parametrize(
+        "shape",
+        [(3,), (2, 3, 1), ()],
+        ids=("1D", "3D", "0D"),
+    )
+    def test_non_2d_data_raises(self, shape: tuple[int, ...]) -> None:
+        """MultiPointInput requires 2-D (bands, positions) data.
+
+        The 1-D case is the load-bearing one: the shape check indexes
+        ``data.shape[1]``, so it must reject a non-2-D array before that index,
+        or a 1-D array raises ``IndexError`` instead of the ``ValueError`` the
+        contract promises.
+        """
+        with pytest.raises(ValueError, match="MultiPoint data must have shape"):
+            multipoint_input(np.ma.MaskedArray(np.zeros(shape)))
+
+    def test_position_count_mismatch_raises(self) -> None:
+        """data.shape[1] must equal the number of positions in the geometry."""
+        with pytest.raises(ValueError, match="Number of positions"):
+            # POSITIONS has three positions; five columns cannot align.
+            multipoint_input(np.ma.MaskedArray(np.zeros((2, 5))))
+
+    def test_band_count_mismatch_raises(self) -> None:
+        """A non-empty bands tuple must match data.shape[0]."""
+        with pytest.raises(ValueError, match="Number of bands"):
+            MultiPointInput(
+                data=np.ma.MaskedArray(np.zeros((2, 3))),
+                geometry=POSITIONS,
+                crs=CRS_EPSG_3857,
+                bands=(BandInfo("b1"),),
+            )
+
+    def test_duplicate_band_names_raises(self) -> None:
+        """Band names become CovJSON keys, so they must be unique."""
+        with pytest.raises(ValueError, match="unique"):
+            MultiPointInput(
+                data=np.ma.MaskedArray(np.zeros((2, 3))),
+                geometry=POSITIONS,
+                crs=CRS_EPSG_3857,
+                bands=(BandInfo("x"), BandInfo("x")),
+            )
+
+    def test_empty_band_axis_raises(self) -> None:
+        """A zero-size band axis is rejected early."""
+        with pytest.raises(ValueError, match="non-empty"):
+            MultiPointInput(
+                data=np.ma.MaskedArray(np.zeros((0, 3))),
+                geometry=POSITIONS,
+                crs=CRS_EPSG_3857,
+            )
+
+    def test_frozen(self) -> None:
+        """MultiPointInput is immutable."""
+        cov = multipoint_input(np.ma.MaskedArray(np.zeros((2, 3))))
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cov.data = np.ma.MaskedArray(np.zeros((2, 3)))  # type: ignore[misc]
+
+
 class TestImagedataToPolygonInput:
     """Test the reduce-and-convert path from a clipped ImageData."""
 
@@ -694,4 +787,111 @@ class TestImagedataToPolygonInput:
         with pytest.raises(ValueError, match="no CRS"):
             imagedata_to_polygon_input(
                 make_image(crs=None), geometry=SQUARE, stat=Stat.MEAN
+            )
+
+
+class TestPointdataToMultipointInput:
+    """Test conversion from a per-position sequence of PointData reads."""
+
+    def test_reads_stack_into_bands_by_positions(self) -> None:
+        """Each read is a column; stacking yields (bands, positions), values kept."""
+        p0 = make_point(np.array([1.0, 2.0], dtype="float32"))
+        p1 = make_point(np.array([3.0, 4.0], dtype="float32"))
+        cov = pointdata_to_multipoint_input(
+            [p0, p1],
+            geometry=POSITIONS_2,
+            bands=(BandInfo("b1"), BandInfo("b2")),
+            crs=CRS_EPSG_3857,
+        )
+
+        assert cov.data.shape == (2, 2)
+        assert cov.data.tolist() == [[1.0, 3.0], [2.0, 4.0]]
+        assert cov.geometry == POSITIONS_2
+        assert cov.crs == CRS_EPSG_3857
+
+    def test_out_of_bounds_position_becomes_masked_column(self) -> None:
+        """A ``None`` (out-of-bounds) position contributes an all-masked column."""
+        p0 = make_point(np.array([1.0, 2.0], dtype="float32"))
+        cov = pointdata_to_multipoint_input(
+            [p0, None],
+            geometry=POSITIONS_2,
+            bands=(BandInfo("b1"), BandInfo("b2")),
+            crs=CRS_EPSG_3857,
+        )
+
+        mask = np.ma.getmaskarray(cov.data)
+        # Position 0 present, position 1 (the None) masked for every band.
+        assert not mask[:, 0].any()
+        assert mask[:, 1].all()
+
+    def test_all_out_of_bounds_yields_all_masked(self) -> None:
+        """Every position ``None`` yields an all-masked array with no read at all."""
+        cov = pointdata_to_multipoint_input(
+            [None, None],
+            geometry=POSITIONS_2,
+            bands=(BandInfo("b1", dtype="int16"),),
+            crs=CRS_EPSG_3857,
+        )
+
+        assert cov.data.shape == (1, 2)
+        assert np.ma.getmaskarray(cov.data).all()
+
+    def test_masked_read_entry_survives(self) -> None:
+        """A nodata (masked) band in a read stays masked through stacking."""
+        arr: np.ma.MaskedArray[Any, np.dtype[Any]] = np.ma.MaskedArray(
+            np.array([1.0, 2.0], dtype="float32"), mask=[True, False]
+        )
+        cov = pointdata_to_multipoint_input(
+            [make_point(arr)],
+            geometry=MultiPoint(positions=((0.0, 0.0),)),
+            bands=(BandInfo("b1"), BandInfo("b2")),
+            crs=CRS_EPSG_3857,
+        )
+
+        mask = np.ma.getmaskarray(cov.data)
+        assert mask[0, 0]
+        assert not mask[1, 0]
+
+    def test_dtype_stamped_from_stacked_array(self) -> None:
+        """The band dtype is stamped from the stacked array, agreeing with values."""
+        p0 = make_point(np.array([10, 20], dtype="int16"))
+        cov = pointdata_to_multipoint_input(
+            [p0],
+            geometry=MultiPoint(positions=((0.0, 0.0),)),
+            bands=(BandInfo("b1", dtype="float32"), BandInfo("b2", dtype="float32")),
+            crs=CRS_EPSG_3857,
+        )
+
+        assert cov.data.dtype == np.dtype("int16")
+        assert all(band.dtype == np.dtype("int16") for band in cov.bands)
+
+    def test_masked_column_does_not_promote_integer_dtype(self) -> None:
+        """A synthesized masked column keeps the read dtype, not float64.
+
+        ``np.ma.masked_all`` defaults to float64, which would promote an integer
+        read on stacking and declare a float range over integer values. The
+        column is built with the band dtype instead, so a mix of an integer read
+        and a masked position stays integer.
+        """
+        p0 = make_point(np.array([10, 20], dtype="int16"))
+        cov = pointdata_to_multipoint_input(
+            [p0, None],
+            geometry=POSITIONS_2,
+            bands=(BandInfo("b1", dtype="int16"), BandInfo("b2", dtype="int16")),
+            crs=CRS_EPSG_3857,
+        )
+
+        assert cov.data.dtype == np.dtype("int16")
+        assert all(band.dtype == np.dtype("int16") for band in cov.bands)
+
+    def test_position_count_mismatch_delegates_to_input(self) -> None:
+        """Misaligned reads and positions raise MultiPointInput's precise message."""
+        p0 = make_point(np.array([1.0, 2.0], dtype="float32"))
+        with pytest.raises(ValueError, match="Number of positions"):
+            # Two reads, but the geometry names three positions.
+            pointdata_to_multipoint_input(
+                [p0, p0],
+                geometry=POSITIONS,
+                bands=(BandInfo("b1"), BandInfo("b2")),
+                crs=CRS_EPSG_3857,
             )

@@ -14,10 +14,11 @@ from covjson_pydantic.domain import CompactAxis, DomainType, ValuesAxis
 from covjson_pydantic.ndarray import NdArrayFloat, NdArrayInt, NdArrayStr
 from covjson_pydantic.unit import Symbol
 
-from titiler_covjson.geometry import Polygon, Position
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
 from titiler_covjson.input import (
     BandInfo,
     GridInput,
+    MultiPointInput,
     PointInput,
     PolygonInput,
 )
@@ -427,6 +428,38 @@ def _polygon_input(
     )
 
 
+# Three positions, so a (bands, positions) shape and the composite axis both
+# read unambiguously in the tests below.
+_POSITIONS = MultiPoint(positions=((-5.0, 2.5), (-4.0, 3.5), (-3.0, 4.5)))
+
+
+def _multipoint_input(
+    data: np.ma.MaskedArray[Any, np.dtype[Any]],
+    *,
+    geometry: MultiPoint | None = None,
+    bands: tuple[BandInfo, ...] = (),
+    crs: rasterio.CRS | None = None,
+) -> MultiPointInput:
+    """Build a MultiPointInput for modeler tests.
+
+    Args:
+        data: The masked data array, shaped ``(bands, positions)``.
+        geometry: The multipoint; defaults to the three-position
+            :data:`_POSITIONS`.
+        bands: Per-band metadata; empty to let MultiPointInput synthesize it.
+        crs: CRS for the input; defaults to EPSG:4326 (WGS84).
+
+    Returns:
+        MultiPointInput: A multipoint input over a fixed WGS84 geometry.
+    """
+    return MultiPointInput(
+        data=data,
+        geometry=geometry or _POSITIONS,
+        crs=crs or rasterio.CRS.from_epsg(4326),
+        bands=bands,
+    )
+
+
 class TestPolygonCoverage:
     """Conversion of polygon (zonal-reduction) inputs to a Polygon Coverage."""
 
@@ -532,6 +565,143 @@ class TestPolygonCoverage:
         """
         data = _masked([1.0], dtype="float32")
         cov = to_coverage(_polygon_input(data, crs=rasterio.CRS.from_epsg(4326)))
+
+        composite = cov.domain.axes.composite
+        assert isinstance(composite, ValuesAxis)
+        assert composite.coordinates == ["x", "y"]
+
+        assert cov.domain.referencing is not None
+        assert cov.domain.referencing[0].coordinates == ["y", "x"]
+
+        assert_schema_valid(cov)
+
+
+class TestMultiPointCoverage:
+    """Conversion of multipoint (per-position sample) inputs to a MultiPoint."""
+
+    def test_single_band_multipoint_is_schema_valid(self) -> None:
+        """A single-band multipoint converts to a schema-valid MultiPoint Coverage."""
+        data = _masked([[7.5, 8.5, 9.5]], dtype="float32")
+        cov = to_coverage(_multipoint_input(data, bands=(BandInfo("b1", unit="mm"),)))
+
+        assert isinstance(cov, Coverage)
+        assert cov.domain.domainType == DomainType.multi_point
+
+        # A MultiPoint domain carries a single `composite` axis, dataType "tuple",
+        # holding one (x, y) per position: N positions, not one wrapped geometry.
+        composite = cov.domain.axes.composite
+        assert isinstance(composite, ValuesAxis)
+        assert composite.dataType == "tuple"
+        assert composite.coordinates == ["x", "y"]
+        assert len(composite.values) == 3
+
+        # The range runs 1-D over the composite axis: one value per position.
+        assert set(cov.ranges) == {"b1"}
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayFloat)
+        assert nd.axisNames == ["composite"]
+        assert nd.shape == [3]
+        assert nd.values == [7.5, 8.5, 9.5]
+
+        assert_schema_valid(cov)
+
+    def test_composite_values_are_flat_positions(self) -> None:
+        """The composite values are a flat [[x, y], ...], not a wrapped geometry.
+
+        This locks the inversion from the Polygon domain: Polygon wraps its one
+        geometry (``values=[rings]``, nesting three deep), while MultiPoint lists
+        its positions directly (``values=[[x, y], ...]``, nesting two deep). A
+        stray wrap here would produce a schema-invalid tuple.
+        """
+        data = _masked([[1.0, 2.0, 3.0]], dtype="float32")
+        cov = to_coverage(_multipoint_input(data))
+
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        assert dumped["domain"]["axes"]["composite"]["values"] == [
+            [-5.0, 2.5],
+            [-4.0, 3.5],
+            [-3.0, 4.5],
+        ]
+        assert_schema_valid(cov)
+
+    def test_masked_value_serializes_as_null(self) -> None:
+        """A position with no value (masked) serializes as JSON null in place."""
+        data = _masked([[1.5, 2.5, 3.5]], mask=[[False, True, False]], dtype="float32")
+        cov = to_coverage(_multipoint_input(data, bands=(BandInfo("b1"),)))
+
+        dumped = json.loads(cov.model_dump_json(exclude_none=True))
+        assert dumped["ranges"]["b1"]["values"] == [1.5, None, 3.5]
+        assert_schema_valid(cov)
+
+    def test_integer_data_produces_integer_range(self) -> None:
+        """An integer-typed sample yields an NdArrayInt range over composite."""
+        data = _masked([[10, 20, 30]], dtype="int64")
+        cov = to_coverage(
+            _multipoint_input(data, bands=(BandInfo("b1", dtype="int64"),))
+        )
+
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayInt)
+        assert nd.axisNames == ["composite"]
+        assert nd.shape == [3]
+        assert nd.values == [10, 20, 30]
+        assert_schema_valid(cov)
+
+    def test_multiple_bands_keep_order_and_names(self) -> None:
+        """Each band yields a parameter and a composite-indexed range by its name."""
+        data = _masked([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
+        cov = to_coverage(
+            _multipoint_input(data, bands=(BandInfo("red"), BandInfo("nir")))
+        )
+
+        assert cov.parameters is not None
+        assert list(cov.parameters.root) == ["red", "nir"]
+        assert list(cov.ranges) == ["red", "nir"]
+        nir = cov.ranges["nir"]
+        assert isinstance(nir, NdArrayFloat)
+        assert nir.values == [4.0, 5.0, 6.0]
+        assert_schema_valid(cov)
+
+    def test_single_position_multipoint_is_schema_valid(self) -> None:
+        """One position is a valid MultiPoint: a length-1 composite and range."""
+        data = _masked([[42.0]], dtype="float32")
+        cov = to_coverage(
+            _multipoint_input(data, geometry=MultiPoint(positions=((0.0, 0.0),)))
+        )
+
+        composite = cov.domain.axes.composite
+        assert isinstance(composite, ValuesAxis)
+        assert len(composite.values) == 1
+
+        nd = cov.ranges["b1"]
+        assert isinstance(nd, NdArrayFloat)
+        assert nd.shape == [1]
+        assert nd.values == [42.0]
+        assert_schema_valid(cov)
+
+    def test_projected_crs_referencing(self) -> None:
+        """A projected CRS yields ProjectedCRS referencing in the domain."""
+        data = _masked([[1.0, 2.0, 3.0]], dtype="float32")
+        cov = to_coverage(_multipoint_input(data, crs=rasterio.CRS.from_epsg(32637)))
+
+        assert cov.domain.referencing is not None
+        system = cov.domain.referencing[0].system
+        assert system.type == "ProjectedCRS"
+        assert system.id == "http://www.opengis.net/def/crs/EPSG/0/32637"
+        assert_schema_valid(cov)
+
+    def test_lat_first_crs_axis_order_divergence_is_intentional(self) -> None:
+        """A latitude-first CRS diverges the composite and referencing orders.
+
+        The ``composite`` axis always lists ``["x", "y"]`` (the position storage
+        order: longitude/easting then latitude/northing), while ``referencing``
+        lists the CRS's declared axis order, which is ``["y", "x"]`` for a
+        latitude-first CRS such as EPSG:4326. Unifying them would make a strict
+        consumer read a stored ``[lon, lat]`` position as ``[lat, lon]``. This
+        locks that intent so the divergence is not mistaken for a bug.
+        """
+        data = _masked([[1.0, 2.0, 3.0]], dtype="float32")
+        cov = to_coverage(_multipoint_input(data, crs=rasterio.CRS.from_epsg(4326)))
 
         composite = cov.domain.axes.composite
         assert isinstance(composite, ValuesAxis)

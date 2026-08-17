@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from titiler_covjson.geometry import Polygon, Position
-from titiler_covjson.wkt import InvalidCoords, parse_point_wkt, parse_polygon_wkt
+from titiler_covjson.geometry import MultiPoint, Polygon, Position
+from titiler_covjson.wkt import (
+    InvalidCoords,
+    parse_multipoint_wkt,
+    parse_point_wkt,
+    parse_polygon_wkt,
+    parse_position_coords,
+)
 
 
 @pytest.mark.parametrize(
@@ -176,3 +182,111 @@ def test_parse_polygon_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
 
     assert isinstance(parsed, InvalidCoords)
     assert "Invalid polygon" in parsed.message
+
+
+@pytest.mark.parametrize(
+    ("wkt", "expected"),
+    [
+        ("MULTIPOINT((0 0), (1 1))", ((0.0, 0.0), (1.0, 1.0))),
+        ("MULTIPOINT(0 0, 1 1)", ((0.0, 0.0), (1.0, 1.0))),
+        ("MULTIPOINT((0 0))", ((0.0, 0.0),)),
+        ("MULTIPOINT(-5.0 2.5, 1e1 -3)", ((-5.0, 2.5), (10.0, -3.0))),
+        ("  multipoint ( ( 0 0 ) , ( 1 1 ) ) ", ((0.0, 0.0), (1.0, 1.0))),
+    ],
+    ids=("parenthesized", "flat", "single", "decimals-signs", "whitespace-case"),
+)
+def test_parse_multipoint_wkt_accepts_both_forms(
+    wkt: str, expected: tuple[tuple[float, float], ...]
+) -> None:
+    assert parse_multipoint_wkt(wkt) == MultiPoint(positions=expected)
+
+
+def test_parse_multipoint_wkt_accepts_mixed_parenthesization() -> None:
+    """A mixed ``((x y), x y)`` keeps every point, dropping none.
+
+    This locks the strip-not-findall decision: stripping the per-point parens
+    reduces both spellings to one grammar, whereas collecting parenthesized
+    groups would silently discard the bare ``3 4`` here.
+    """
+    parsed = parse_multipoint_wkt("MULTIPOINT((1 2), 3 4)")
+
+    assert parsed == MultiPoint(positions=((1.0, 2.0), (3.0, 4.0)))
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "MULTIPOINT Z ((0 0 5), (1 1 5))",
+        "MULTIPOINT M ((0 0 5))",
+        "MULTIPOINT ZM ((0 0 5 1))",
+        "MULTIPOINT(0 0 5, 1 1 5)",
+    ],
+    ids=("Z-tag", "M-tag", "ZM-tag", "3-token-vertex"),
+)
+def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
+    parsed = parse_multipoint_wkt(wkt)
+
+    assert isinstance(parsed, InvalidCoords)
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "MULTIPOINT EMPTY",
+        "POINT(0 0)",
+        "not-wkt",
+        "",
+        "MULTIPOINT()",
+        "MULTIPOINT((0 0), (x 1))",
+    ],
+    ids=(
+        "empty-geom",
+        "point",
+        "garbage",
+        "blank",
+        "no-points",
+        "non-numeric",
+    ),
+)
+def test_parse_multipoint_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
+    parsed = parse_multipoint_wkt(wkt)
+
+    assert isinstance(parsed, InvalidCoords)
+
+
+def test_parse_multipoint_wkt_reports_duplicate_and_non_finite() -> None:
+    """A duplicate or non-finite position surfaces MultiPoint's own message."""
+    dup = parse_multipoint_wkt("MULTIPOINT((0 0), (0 0))")
+    nan = parse_multipoint_wkt("MULTIPOINT((nan 0))")
+
+    assert isinstance(dup, InvalidCoords)
+    assert "unique" in dup.message
+    assert isinstance(nan, InvalidCoords)
+    assert "finite" in nan.message
+
+
+def test_parse_position_coords_dispatches_point_and_multipoint() -> None:
+    """The one /position entry point returns a Position or a MultiPoint by form."""
+    assert parse_position_coords("POINT(0 0)") == Position(0.0, 0.0)
+    assert parse_position_coords("MULTIPOINT((0 0), (1 1))") == MultiPoint(
+        positions=((0.0, 0.0), (1.0, 1.0))
+    )
+
+
+def test_parse_position_coords_rejects_other_geometries_with_one_message() -> None:
+    """A geometry that is neither POINT nor MULTIPOINT names both accepted forms."""
+    parsed = parse_position_coords("POLYGON((0 0, 1 0, 1 1, 0 0))")
+
+    assert isinstance(parsed, InvalidCoords)
+    assert "POINT" in parsed.message
+    assert "MULTIPOINT" in parsed.message
+
+
+def test_parse_position_coords_delegates_malformed_messages() -> None:
+    """A malformed POINT or MULTIPOINT surfaces that parser's specific message."""
+    bad_point = parse_position_coords("POINT Z (0 0 5)")
+    bad_multi = parse_position_coords("MULTIPOINT((0 0 5))")
+
+    assert isinstance(bad_point, InvalidCoords)
+    assert "not supported" in bad_point.message
+    assert isinstance(bad_multi, InvalidCoords)

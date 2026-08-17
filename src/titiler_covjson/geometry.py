@@ -1,4 +1,4 @@
-"""The geometry a coverage is built over: a position, a polygon.
+"""The geometry a coverage is built over: a position, a polygon, a set of points.
 
 Read these as this service's own types, not as the shapes their names usually
 name. :class:`Polygon` is not an OGC polygon, and it does not become one by
@@ -16,17 +16,18 @@ rule from any source may land in a type here, whether it comes from the geometry
 from CoverageJSON, or from this service's own reach, so a constraint's provenance
 belongs in a comment where it is enforced.
 
-:class:`Position` and :class:`Polygon` are frozen value objects. A request's
-Well-Known Text (WKT) is parsed into one, and a coverage input then pairs it with
-the data read across it. Both of those layers depend on this module and this
-module depends on nothing, so the geometry has a single definition that neither
-side owns.
+:class:`Position`, :class:`Polygon`, and :class:`MultiPoint` are frozen value
+objects. A request's Well-Known Text (WKT) is parsed into one, and a coverage
+input then pairs it with the data read across it. Both of those layers depend on
+this module and this module depends on nothing, so the geometry has a single
+definition that neither side owns.
 
 Each type validates itself at construction, rejecting whatever can be judged from
-the value alone: a non-finite coordinate, or a ring that is unclosed or too short
-to bound an area. An invalid value therefore cannot be constructed. Broader rules
-stay out: whether a request's text parsed at all is the parser's business, and
-which geometries an endpoint will serve is the endpoint's.
+the value alone: a non-finite coordinate, a ring that is unclosed or too short to
+bound an area, or a position repeated within a set. An invalid value therefore
+cannot be constructed. Broader rules stay out: whether a request's text parsed at
+all is the parser's business, and which geometries an endpoint will serve is the
+endpoint's.
 
 The coordinate reference system is not stored here. It lives alongside, on the
 coverage input holding the geometry, so these coordinates are bare numbers in that
@@ -166,3 +167,63 @@ class Polygon:
         ys = [y for _, y in vertices]
 
         return min(xs), min(ys), max(xs), max(ys)
+
+
+@dataclass(frozen=True)
+class MultiPoint:
+    """A set of point locations sampled together.
+
+    Carries one or more ``(x, y)`` positions, in the order given. Bare pairs, not
+    :class:`Position` values: a :class:`Position` admits an optional vertical
+    coordinate, and this service samples a single 2-D raster with no vertical
+    level to honor one. Storing positions as pairs leaves nowhere to put a ``z``,
+    so the unservable state cannot be constructed rather than being built and then
+    rejected. The coordinate reference system is not stored here: it lives
+    alongside on the :class:`CoverageInput` variant that holds the multipoint
+    (as ``crs``), so the coordinates are bare numbers expressed in that CRS.
+
+    Attributes:
+        positions: The sampled ``(x, y)`` positions, in request order. At least
+            one, all finite, and all distinct.
+    """
+
+    # 2-D only. Vertical selection is deferred, not rejected outright (see
+    # docs/adr/0001-covjson-http-api-direction.md): the day a z-backed dataset
+    # lands, CoverageJSON already permits an ["x", "y", "z"] MultiPoint composite,
+    # so widen this representation here. Position carries a z field for the same
+    # future; this type does not, to keep an unservable z unconstructible today.
+    positions: tuple[tuple[float, float], ...]
+
+    def __post_init__(self) -> None:
+        """Reject an empty, non-finite, or duplicate-bearing multipoint.
+
+        Raises:
+            ValueError: If there are no positions; if any coordinate is not finite
+                (NaN or infinity); or if any position repeats.
+        """
+        if not self.positions:
+            msg = "A multipoint must have at least one position."
+            raise ValueError(msg)
+
+        if not all(
+            math.isfinite(coordinate)
+            for position in self.positions
+            for coordinate in position
+        ):
+            msg = "MultiPoint coordinates must be finite (not NaN or infinity)."
+            raise ValueError(msg)
+
+        # Distinct positions. A MultiPoint domain lists these as a coverage axis,
+        # whose values index the range: a repeated position would leave "which
+        # range element does this refer to?" ambiguous. The CoverageJSON schema
+        # (OGC 21-069r2) makes this concrete. Its `valuesAxisBase.values` declares
+        # `uniqueItems: true`, so a duplicate serializes to a schema-invalid
+        # document. Note that -0.0 and 0.0 collide here exactly as they do under
+        # the schema's uniqueness test (both compare equal), so this check and the
+        # schema agree on every pair.
+        if len(set(self.positions)) != len(self.positions):
+            msg = (
+                "MultiPoint positions must be unique; "
+                "a coverage axis cannot index a value twice."
+            )
+            raise ValueError(msg)
