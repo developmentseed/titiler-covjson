@@ -1,0 +1,66 @@
+# Opens a quarterly issue reminding a maintainer to re-lock stale transitive
+# dependencies. Dependabot's uv updates are lockfile-only and move only direct
+# dependencies, so transitive entries drift until a full `uv lock --upgrade`,
+# and a stale transitive can sit on a security advisory Dependabot will not fix
+# (as pymdown-extensions did). Automating the reminder rather than the change is
+# deliberate: a pull request opened with GITHUB_TOKEN does not trigger CI, so it
+# could never satisfy the required `ci-gate` check.
+name: Lockfile refresh reminder
+
+on:
+  schedule:
+    # 09:00 UTC on the first of January, April, July, and October.
+    - cron: "0 9 1 1,4,7,10 *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-suffix: lockfile-reminder
+      # A missed quarter should not stack up duplicate reminders, so skip while
+      # one is still open.
+      - name: Skip when a reminder is already open
+        id: existing
+        run: |
+          open=$(gh issue list --state open \
+            --search '"Quarterly lockfile refresh" in:title' \
+            --json number --jq 'length')
+          echo "open=$open" >> "$GITHUB_OUTPUT"
+      # The dry run writes no lockfile; its output just tells the reader what
+      # this quarter's refresh would take.
+      - name: Compose the issue body
+        if: steps.existing.outputs.open == '0'
+        run: |
+          {
+            echo '## Pending lockfile changes'
+            echo
+            echo '```text'
+            uv lock --upgrade --dry-run 2>&1 || true
+            echo '```'
+            echo
+            cat .github/lockfile-refresh.md
+          } > body.md
+      - name: Open the reminder issue
+        if: steps.existing.outputs.open == '0'
+        run: |
+          gh issue create --title "Quarterly lockfile refresh" \
+            --label chore --label dependencies --body-file body.md
