@@ -205,3 +205,25 @@ jobs:
       - name: Stop the demo container
         if: always()
         run: docker rm -f covjson-demo || true
+
+  # The single status check branch protection requires. The Python matrix is
+  # derived from pyproject classifiers at run time, so the job names it produces
+  # (`test (3.11, highest)`, `typecheck (3.12)`, ...) change whenever that
+  # classifier list does. Requiring those names directly would leave protection
+  # silently pointing at contexts nothing reports, so requiring this one
+  # aggregate instead keeps the matrix free to change without a ruleset edit.
+  ci-gate:
+    needs: [config, checks, typecheck, test, coverage, docker-smoke]
+    # Runs even when a dependency fails, so the gate reports a conclusion rather
+    # than being skipped (a skipped required check never satisfies protection).
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify every upstream job succeeded
+        # No job above is conditionally skipped, so success is the only result
+        # that should let a merge through; treat the rest as a red build.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "::error::At least one CI job did not succeed; see the run summary."
+          exit 1
