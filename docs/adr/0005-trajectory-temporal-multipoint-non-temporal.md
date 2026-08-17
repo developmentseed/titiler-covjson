@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 Amends [ADR-0004](0004-non-temporal-surface-edr-query-verbs.md) (reclassifies
 `/trajectory`).
