@@ -6,6 +6,7 @@ import pytest
 
 from titiler_covjson.geometry import MultiPoint, Polygon, Position
 from titiler_covjson.wkt import (
+    _COORDINATE_TOKEN,
     InvalidCoords,
     parse_multipoint_wkt,
     parse_point_wkt,
@@ -28,6 +29,58 @@ from titiler_covjson.wkt import (
 )
 def test_parse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None:
     assert parse_point_wkt(wkt) == expected
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "0",
+        "-5.0",
+        "+1",
+        "1e2",
+        "1E2",
+        "1e-3",
+        "1.5e+10",
+        ".5",
+        "5.",
+        "1e400",
+        "nan",
+        "NaN",
+        "inf",
+        "-inf",
+        "+Infinity",
+    ],
+)
+def test_coordinate_token_never_lets_float_raise(token: str) -> None:
+    """Every token the pattern admits converts, so the parsers need no try/except.
+
+    The parsers check with the pattern instead of catching ``float``'s error, so
+    a token it admits but ``float`` rejects would surface as a 500 rather than a
+    400. This pins the pattern as the narrower of the two.
+    """
+    assert _COORDINATE_TOKEN.fullmatch(token) is not None
+    float(token)
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["1_000", "١٢", "１２", "0x10", "1e", "--1", "1d5", "infin", "nanny", ""],
+    ids=[
+        "underscore",
+        "arabic-indic",
+        "fullwidth",
+        "hex",
+        "bare-exponent",
+        "double-sign",
+        "d-exponent",
+        "partial-inf",
+        "partial-nan",
+        "empty",
+    ],
+)
+def test_coordinate_token_rejects_non_wkt_syntax(token: str) -> None:
+    """WKT's number grammar is narrower than what ``float`` reads."""
+    assert _COORDINATE_TOKEN.fullmatch(token) is None
 
 
 def test_parse_point_wkt_accepts_an_underflowing_coordinate() -> None:
@@ -77,6 +130,10 @@ def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         ("POINT(1 , 2)", "coordinates must be numbers"),
         ("POINT(x 0)", "coordinates must be numbers"),
         ("POINT(a b c)", "coordinates must be numbers"),
+        ("POINT(1_000 2)", "coordinates must be numbers"),
+        ("POINT(١٢ 2)", "coordinates must be numbers"),
+        ("POINT(１２ 2)", "coordinates must be numbers"),
+        ("POINT(0x10 2)", "coordinates must be numbers"),
         ("POINT(nan 0)", "got x=nan, y=0.0."),
         ("POINT(1 inf)", "got x=1.0, y=inf."),
         ("POINT(1e400 0)", "got x=inf, y=0.0."),
@@ -93,6 +150,10 @@ def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "spaced-comma",
         "non-numeric",
         "non-numeric-3-token",
+        "underscore-separator",
+        "arabic-indic-digits",
+        "fullwidth-digits",
+        "hex-literal",
         "nan",
         "inf",
         "overflow",
@@ -177,6 +238,7 @@ def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         ("", "expected WKT POLYGON"),
         ("POLYGON EMPTY", "expected WKT POLYGON"),
         ("POLYGON(())", "at least four vertices (a closed triangle); in ring 0 got 0."),
+        ("POLYGON((0 0, 1 0, 1 1, 0 0) JUNK (2 2, 3 2, 3 3, 2 2))", "unexpected text"),
         ("POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, x 1, 2 2, 1 1))", "in ring 1,"),
         ("POLYGON((0 0 1 0, 1 1, 0 0))", "check for a missing comma"),
         ("POLYGON(0 0, 1 1)", "expected at least one parenthesized ring"),
@@ -201,6 +263,7 @@ def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "blank",
         "empty-geom",
         "empty-ring",
+        "junk-between-rings",
         "non-numeric-in-hole",
         "missing-comma",
         "no-ring",

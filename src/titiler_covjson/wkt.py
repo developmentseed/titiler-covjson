@@ -63,6 +63,17 @@ _MULTIPOINT_WKT = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# A coordinate token, checked before `float` reads it: `float` also accepts PEP
+# 515 underscores (`1_000`) and any Unicode decimal digit (`١٢`), silently
+# yielding a coordinate the requester never wrote -- hence `[0-9]`, not `\d`.
+# The non-finite spellings are admitted deliberately, so finiteness keeps its
+# single home in the geometry types.
+_COORDINATE_TOKEN = re.compile(
+    r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+    r"|[+-]?(?:nan|inf(?:inity)?)",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class InvalidCoords:
@@ -133,27 +144,25 @@ def parse_point_wkt(coords: str) -> Position | InvalidCoords:
     if match["tag"]:
         return _vertical_point_refusal(coords)
 
-    # Read the numbers before counting them, so the count guard below speaks only
+    # Check the tokens before counting them, so the count guard below speaks only
     # for tokens that are coordinates. Counting first would call `POINT(1 , 2)`
     # vertical, since a spaced comma splits into three tokens without any of them
     # naming a level.
-    try:
-        values = [float(token) for token in tokens]
-    except ValueError:
+    if not all(map(_COORDINATE_TOKEN.fullmatch, tokens)):
         return InvalidCoords(
             f"Invalid position {coords!r}: coordinates must be numbers, "
             "e.g., POINT(0 0)."
         )
 
-    if len(values) in {3, 4}:
+    if len(tokens) in {3, 4}:
         return _vertical_point_refusal(coords)
 
-    if len(values) != 2:
+    if len(tokens) != 2:
         return InvalidCoords(
             f"Invalid position {coords!r}: expected two coordinates, e.g., POINT(0 0)."
         )
 
-    x, y = values
+    x, y = (float(token) for token in tokens)
 
     # Position owns the finiteness invariant, so its message carries through
     # verbatim: a rule added there then reports itself instead of being
@@ -223,6 +232,15 @@ def parse_polygon_wkt(coords: str) -> Polygon | InvalidCoords:
         return InvalidCoords(
             f"Invalid polygon {coords!r}: expected at least one parenthesized ring, "
             "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
+        )
+
+    # findall keeps only the parenthesized groups, so text between or after them
+    # would otherwise be dropped in silence and a `POLYGON((...) JUNK (...))`
+    # would read as a well-formed two-ring polygon. Only separators may remain.
+    if _POLYGON_RING.sub(" ", match["rings"]).strip(" ,\t\n\r"):
+        return InvalidCoords(
+            f"Invalid polygon {coords!r}: unexpected text outside the rings; "
+            "expected only commas between parenthesized rings."
         )
 
     # Ring by ring, so a vertex fault names the ring it came from; Polygon's own
@@ -433,32 +451,30 @@ def _parse_xy_pairs(pairs: str) -> tuple[tuple[float, float], ...]:
     for pair in pairs.split(","):
         tokens = pair.split()
 
-        # Read before counting, as in parse_point_wkt. float()'s own message is
-        # replaced here so CPython's internal text never reaches the requester.
-        try:
-            values = [float(token) for token in tokens]
-        except ValueError:
+        # Checked before counting, and checked rather than caught, both as in
+        # parse_point_wkt.
+        if not all(map(_COORDINATE_TOKEN.fullmatch, tokens)):
             msg = f"each vertex coordinate must be a number; got {pair.strip()!r}."
-            raise ValueError(msg) from None
+            raise ValueError(msg)
 
         # Three numbers read as one 3-D vertex; four or more read as a dropped
         # comma, since here the comma is the separator. parse_point_wkt keeps 4
         # as vertical because a point has no separator for anyone to drop.
-        if len(values) == 3:
+        if len(tokens) == 3:
             msg = (
                 "vertical or measured coordinates are not supported: each vertex "
                 f"must be a 2-D 'x y' pair; got {pair.strip()!r}."
             )
             raise ValueError(msg)
 
-        if len(values) != 2:
+        if len(tokens) != 2:
             msg = (
                 "each vertex must be an 'x y' pair (check for a missing comma); "
                 f"got {pair.strip()!r}."
             )
             raise ValueError(msg)
 
-        x, y = values
+        x, y = (float(token) for token in tokens)
         vertices.append((x, y))
 
     return tuple(vertices)
