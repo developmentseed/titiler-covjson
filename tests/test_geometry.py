@@ -31,22 +31,24 @@ class TestPosition:
         assert pos.z == 100.0
 
     @pytest.mark.parametrize(
-        ("x", "y", "z"),
+        ("x", "y", "z", "expected"),
         [
-            (float("nan"), 2.0, None),
-            (float("inf"), 2.0, None),
-            (1.0, float("-inf"), None),
-            (1.0, 2.0, float("nan")),
-            (1.0, 2.0, float("inf")),
+            (float("nan"), 2.0, None, "got x=nan, y=2.0."),
+            (float("inf"), 2.0, None, "got x=inf, y=2.0."),
+            (1.0, float("-inf"), None, "got x=1.0, y=-inf."),
+            (1.0, 2.0, float("nan"), "got x=1.0, y=2.0, z=nan."),
+            (1.0, 2.0, float("inf"), "got x=1.0, y=2.0, z=inf."),
         ],
         ids=("x-nan", "x-inf", "y-neg-inf", "z-nan", "z-inf"),
     )
     def test_non_finite_coordinate_raises(
-        self, x: float, y: float, z: float | None
+        self, x: float, y: float, z: float | None, expected: str
     ) -> None:
-        """A NaN or infinite x, y, or z is rejected at construction."""
-        with pytest.raises(ValueError, match="must be finite"):
+        """A NaN or infinite x, y, or z is rejected, naming the axis at fault."""
+        with pytest.raises(ValueError, match="must be finite") as excinfo:
             Position(x, y, z=z)
+
+        assert str(excinfo.value).endswith(expected)
 
     def test_frozen(self) -> None:
         """Position is immutable."""
@@ -88,6 +90,22 @@ class TestPolygon:
         """A ring whose first and last vertices differ is rejected."""
         with pytest.raises(ValueError, match="closed"):
             Polygon(rings=(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),))
+
+    def test_ring_faults_name_the_offending_ring(self) -> None:
+        """A hole at fault is reported by index, not left for the reader to find.
+
+        A polygon with holes has no other way to say which ring failed, and the
+        exterior is a poor guess: it is the ring most likely to be correct.
+        """
+        exterior = ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0))
+        short_hole = ((1.0, 1.0), (2.0, 1.0), (1.0, 1.0))
+        unclosed_hole = ((1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0))
+
+        with pytest.raises(ValueError, match=r"in ring 1 got 3\."):
+            Polygon(rings=(exterior, short_hole))
+
+        with pytest.raises(ValueError, match=r"in ring 1 got: \(1\.0, 1\.0\)"):
+            Polygon(rings=(exterior, unclosed_hole))
 
     @pytest.mark.parametrize(
         "bad", [float("nan"), float("inf"), float("-inf")], ids=("nan", "inf", "-inf")
@@ -165,9 +183,24 @@ class TestMultiPoint:
         with pytest.raises(ValueError, match="unique"):
             MultiPoint(positions=((0.0, 0.0), (1.0, 1.0), (0.0, 0.0)))
 
+    def test_duplicate_positions_name_both_indexes(self) -> None:
+        """The repeat names the pair, which a long point list otherwise hides."""
+        with pytest.raises(
+            ValueError, match=r"position 3 \(1\.0, 1\.0\) repeats position 1"
+        ):
+            MultiPoint(positions=((0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (1.0, 1.0)))
+
     def test_negative_zero_and_zero_are_the_same_position(self) -> None:
-        """-0.0 and 0.0 collide as duplicates, matching the schema's uniqueness test."""
-        with pytest.raises(ValueError, match="unique"):
+        """-0.0 and 0.0 collide as duplicates, matching the schema's uniqueness test.
+
+        Both values are echoed, not just the repeat's: these two positions are
+        equal but do not look it, so a message naming one index and the other
+        index's value would read as a mistake.
+        """
+        with pytest.raises(
+            ValueError,
+            match=r"position 1 \(-0\.0, 0\.0\) repeats position 0 \(0\.0, 0\.0\)",
+        ):
             MultiPoint(positions=((0.0, 0.0), (-0.0, 0.0)))
 
     def test_frozen(self) -> None:

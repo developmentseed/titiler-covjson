@@ -37,7 +37,7 @@ from titiler_covjson.geometry import MultiPoint, Polygon, Position
 # count to reject 3-D/measured geometries; the comma (the MULTIPOINT coordinate
 # separator) is deliberately not allowed inside a single point.
 _POINT_WKT = re.compile(
-    r"^\s*POINT\s*(?P<tag>Z|M|ZM)?\s*\(\s*(?P<coords>[^()]*?)\s*\)\s*$",
+    r"^\s*POINT\s*(?P<tag>ZM|Z|M)?\s*\(\s*(?P<coords>[^()]*?)\s*\)\s*$",
     re.IGNORECASE,
 )
 
@@ -46,7 +46,7 @@ _POINT_WKT = re.compile(
 # splits the ring list with _POLYGON_RING (each parenthesized group is one ring);
 # MULTIPOLYGON fails this pattern (the leading `MULTI`), keeping a single polygon.
 _POLYGON_WKT = re.compile(
-    r"^\s*POLYGON\s*(?P<tag>Z|M|ZM)?\s*\((?P<rings>.*)\)\s*$",
+    r"^\s*POLYGON\s*(?P<tag>ZM|Z|M)?\s*\((?P<rings>.*)\)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _POLYGON_RING = re.compile(r"\(([^()]*)\)")
@@ -59,7 +59,7 @@ _POLYGON_RING = re.compile(r"\(([^()]*)\)")
 # disjoint; `MULTIPOINT EMPTY` fails it too (no parentheses), which is the
 # rejection.
 _MULTIPOINT_WKT = re.compile(
-    r"^\s*MULTIPOINT\s*(?P<tag>Z|M|ZM)?\s*\((?P<points>.*)\)\s*$",
+    r"^\s*MULTIPOINT\s*(?P<tag>ZM|Z|M)?\s*\((?P<points>.*)\)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -88,11 +88,14 @@ def parse_point_wkt(coords: str) -> Position | InvalidCoords:
     everything else yields an :class:`InvalidCoords`:
 
     - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or three or four
-      coordinates): the 2-D raster backing cannot sample a vertical level, so
-      echoing the coordinate back or dropping it would both be dishonest;
-    - a non-POINT geometry, ``POINT EMPTY``, the wrong coordinate count, a
-      comma-separated ``POINT(1, 2)`` (the comma is the ``MULTIPOINT`` separator,
-      not an intra-point one), or any other malformed input;
+      numeric coordinates): the 2-D raster backing cannot sample a vertical
+      level, so echoing the coordinate back or dropping it would both be
+      dishonest;
+    - a non-POINT geometry, ``POINT EMPTY``, the wrong coordinate count, or any
+      other malformed input;
+    - a coordinate that is not a number, including a comma-separated
+      ``POINT(1, 2)`` (the comma is the ``MULTIPOINT`` separator, not an
+      intra-point one, so it leaves the unparseable token ``1,``);
     - a non-finite coordinate (NaN or infinity), which would otherwise serialize
       to a silent ``null`` domain axis.
 
@@ -125,33 +128,43 @@ def parse_point_wkt(coords: str) -> Position | InvalidCoords:
 
     tokens = match["coords"].split()
 
-    # Rejecting rather than ignoring a vertical coordinate is the direction set in
-    # docs/adr/0001-covjson-http-api-direction.md: a 2-D raster cannot honor one,
-    # so accepting it would promise a selection the response does not make.
-    if match["tag"] or len(tokens) in {3, 4}:
+    # One refusal reached by two routes, so it has one wording; the guards stay
+    # apart only because the tag reads before the coordinates and the count after.
+    if match["tag"]:
+        return _vertical_point_refusal(coords)
+
+    # Read the numbers before counting them, so the count guard below speaks only
+    # for tokens that are coordinates. Counting first would call `POINT(1 , 2)`
+    # vertical, since a spaced comma splits into three tokens without any of them
+    # naming a level.
+    try:
+        values = [float(token) for token in tokens]
+    except ValueError:
         return InvalidCoords(
-            "Vertical or measured coordinates are not supported: this endpoint "
-            f"samples a single 2-D raster. Provide a 2-D POINT(x y); got {coords!r}."
+            f"Invalid position {coords!r}: coordinates must be numbers, "
+            "e.g., POINT(0 0)."
         )
 
-    if len(tokens) != 2:
+    if len(values) in {3, 4}:
+        return _vertical_point_refusal(coords)
+
+    if len(values) != 2:
         return InvalidCoords(
             f"Invalid position {coords!r}: expected two coordinates, e.g., POINT(0 0)."
         )
 
-    # float() rejects non-numeric tokens and Position rejects non-finite ones
-    # (NaN/infinity), so one handler covers both: Position owns the finiteness
-    # invariant as the single source of truth. Its ValueError is caught here
-    # rather than propagated, since constructing a Position from a request's
-    # text is exactly this module's boundary.
-    try:
-        x, y = (float(token) for token in tokens)
+    x, y = values
 
+    # Position owns the finiteness invariant, so its message carries through
+    # verbatim: a rule added there then reports itself instead of being
+    # mislabeled as a finiteness failure. The appended example names no rule,
+    # for the same reason.
+    try:
         return Position(x, y)
-    except ValueError:
+    except ValueError as exc:
         return InvalidCoords(
-            f"Invalid position {coords!r}: coordinates must be finite numbers "
-            "(not NaN or infinity), e.g., POINT(0 0)."
+            f"Invalid position {coords!r}: {exc} A usable position looks like "
+            "POINT(0 0)."
         )
 
 
@@ -165,9 +178,9 @@ def parse_polygon_wkt(coords: str) -> Polygon | InvalidCoords:
     else yields an :class:`InvalidCoords`:
 
     - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a vertex with
-      three or four coordinates): the 2-D raster backing has no vertical level to
-      reduce over, so echoing the coordinate back or dropping it would both be
-      dishonest;
+      three or four numeric coordinates): the 2-D raster backing has no vertical
+      level to reduce over, so echoing the coordinate back or dropping it would
+      both be dishonest;
     - a non-POLYGON geometry (including ``MULTIPOLYGON``, whose ``MULTI`` prefix
       fails the pattern), ``POLYGON EMPTY``, an empty ring, a non-finite or
       non-numeric coordinate, an unclosed ring, a ring with fewer than four
@@ -212,13 +225,20 @@ def parse_polygon_wkt(coords: str) -> Polygon | InvalidCoords:
             "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
         )
 
-    # _parse_xy_pairs rejects a non-2-D or non-numeric vertex and Polygon rejects a
-    # non-finite, unclosed, or too-short ring; one handler covers every ValueError.
-    # Polygon owns the ring invariants as the single source of truth, and its
-    # message carries through verbatim (mirroring parse_point_wkt delegating
-    # finiteness to Position).
+    # Ring by ring, so a vertex fault names the ring it came from; Polygon's own
+    # faults already carry that index, and its messages carry through verbatim.
+    rings: list[tuple[tuple[float, float], ...]] = []
+
+    for ring_index, ring_string in enumerate(ring_strings):
+        try:
+            rings.append(_parse_xy_pairs(ring_string))
+        except ValueError as exc:
+            return InvalidCoords(
+                f"Invalid polygon {coords!r}: in ring {ring_index}, {exc}"
+            )
+
     try:
-        return Polygon(rings=tuple(map(_parse_xy_pairs, ring_strings)))
+        return Polygon(rings=tuple(rings))
     except ValueError as exc:
         return InvalidCoords(f"Invalid polygon {coords!r}: {exc}")
 
@@ -234,8 +254,9 @@ def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
     :class:`InvalidCoords`:
 
     - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a point with
-      three or four coordinates): the 2-D raster backing cannot sample a vertical
-      level, so echoing the coordinate back or dropping it would both be dishonest;
+      three or four numeric coordinates): the 2-D raster backing cannot sample a
+      vertical level, so echoing the coordinate back or dropping it would both be
+      dishonest;
     - a non-MULTIPOINT geometry, ``MULTIPOINT EMPTY``, an empty point list, a
       non-finite or non-numeric coordinate, a repeated position, or any other
       malformed input.
@@ -329,12 +350,39 @@ def parse_position_coords(coords: str) -> Position | MultiPoint | InvalidCoords:
     )
 
 
-def _parse_xy_pairs(ring: str) -> tuple[tuple[float, float], ...]:
-    """Parse a WKT ring body (``x y, x y, ...``) into a tuple of ``(x, y)`` vertices.
+def _vertical_point_refusal(coords: str) -> InvalidCoords:
+    """Refuse a point that names a vertical or measured coordinate.
+
+    A ``Z`` / ``M`` / ``ZM`` tag and a third or fourth coordinate are one
+    decision reached two ways, so they share this wording. A single 2-D raster
+    cannot honor a vertical level, and accepting one would promise a selection
+    the response does not make.
 
     Args:
-        ring: A single ring's comma-separated ``x y`` vertices (the text inside
-            one ring's parentheses).
+        coords: The raw ``coords`` query value, quoted back to the requester.
+
+    Returns:
+        InvalidCoords: The refusal, phrased for the requester.
+
+    Examples:
+        >>> print(_vertical_point_refusal("POINT Z (0 0 5)").message)
+        Vertical or measured coordinates are not supported: this endpoint samples
+        a single 2-D raster. Provide a 2-D POINT(x y); got 'POINT Z (0 0 5)'.
+    """
+    return InvalidCoords(
+        "Vertical or measured coordinates are not supported: this endpoint "
+        f"samples a single 2-D raster. Provide a 2-D POINT(x y); got {coords!r}."
+    )
+
+
+def _parse_xy_pairs(pairs: str) -> tuple[tuple[float, float], ...]:
+    """Parse a comma-separated WKT coordinate list into ``(x, y)`` vertices.
+
+    Args:
+        pairs: The comma-separated ``x y`` coordinate pairs of one polygon ring
+            or one multipoint's point list, being the text between the enclosing
+            parentheses and so carrying none of its own (e.g.,
+            ``"0 0, 1 0, 1 1, 0 0"``).
 
     Returns:
         tuple[tuple[float, float], ...]: The parsed vertices, in order.
@@ -343,26 +391,74 @@ def _parse_xy_pairs(ring: str) -> tuple[tuple[float, float], ...]:
         ValueError: If a vertex is not a 2-D ``x y`` pair (including a 3-D or
             measured vertex), or a coordinate is not a number. The caller turns
             this into an :class:`InvalidCoords`.
+
+    Examples:
+        One polygon ring's body, without the parentheses that enclose it:
+
+        >>> _parse_xy_pairs("0 0, 1 0, 1 1, 0 0")
+        ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0))
+
+        A multipoint's point list is the same grammar, so it reads identically;
+        that is why this is not named for either one:
+
+        >>> _parse_xy_pairs("0 0, 1 1")
+        ((0.0, 0.0), (1.0, 1.0))
+
+        Whitespace around and within a pair is insignificant:
+
+        >>> _parse_xy_pairs(" 1   2 ,  3 4 ")
+        ((1.0, 2.0), (3.0, 4.0))
+
+        A vertex that is not two numbers raises, quoting the vertex at fault for
+        the caller to pass on:
+
+        >>> _parse_xy_pairs("0 0, 1")
+        Traceback (most recent call last):
+            ...
+        ValueError: each vertex must be an 'x y' pair (check for a missing ...
+
+        >>> _parse_xy_pairs("0 0, 1 1 1")
+        Traceback (most recent call last):
+            ...
+        ValueError: vertical or measured coordinates are not supported: ...
     """
+    # An empty body is an empty list, not a malformed vertex: `"".split(",")`
+    # yields one blank entry, which would otherwise be reported as a bad pair and
+    # would leave the geometry types' own emptiness rules unreachable.
+    if not pairs.strip():
+        return ()
+
     vertices: list[tuple[float, float]] = []
 
-    for pair in ring.split(","):
+    for pair in pairs.split(","):
         tokens = pair.split()
 
-        if len(tokens) in {3, 4}:
+        # Read before counting, as in parse_point_wkt. float()'s own message is
+        # replaced here so CPython's internal text never reaches the requester.
+        try:
+            values = [float(token) for token in tokens]
+        except ValueError:
+            msg = f"each vertex coordinate must be a number; got {pair.strip()!r}."
+            raise ValueError(msg) from None
+
+        # Three numbers read as one 3-D vertex; four or more read as a dropped
+        # comma, since here the comma is the separator. parse_point_wkt keeps 4
+        # as vertical because a point has no separator for anyone to drop.
+        if len(values) == 3:
             msg = (
                 "vertical or measured coordinates are not supported: each vertex "
                 f"must be a 2-D 'x y' pair; got {pair.strip()!r}."
             )
             raise ValueError(msg)
 
-        if len(tokens) != 2:
-            msg = f"each ring vertex must be an 'x y' pair; got {pair.strip()!r}."
+        if len(values) != 2:
+            msg = (
+                "each vertex must be an 'x y' pair (check for a missing comma); "
+                f"got {pair.strip()!r}."
+            )
             raise ValueError(msg)
 
-        # float() rejects a non-numeric token; a non-finite one (NaN/infinity)
-        # parses here and is rejected by Polygon, as in parse_point_wkt.
-        x, y = (float(token) for token in tokens)
+        x, y = values
         vertices.append((x, y))
 
     return tuple(vertices)

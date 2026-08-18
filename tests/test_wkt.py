@@ -30,6 +30,19 @@ def test_parse_point_wkt_accepts_2d_points(wkt: str, expected: Position) -> None
     assert parse_point_wkt(wkt) == expected
 
 
+def test_parse_point_wkt_accepts_an_underflowing_coordinate() -> None:
+    """A coordinate too small to represent is accepted, silently becoming zero.
+
+    Recorded as a decision rather than left to be rediscovered: ``float``
+    underflows ``1e-400`` to ``0.0`` before any check runs, and the difference
+    between the two is orders of magnitude finer than a coordinate in any CRS
+    this serves can express, so no location is lost. Overflow is not the mirror
+    of this: it reaches infinity, which names no location at all, and is
+    rejected.
+    """
+    assert parse_point_wkt("POINT(1e-400 0)") == Position(0.0, 0.0)
+
+
 @pytest.mark.parametrize(
     "wkt",
     [
@@ -51,19 +64,22 @@ def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "wkt",
+    ("wkt", "expected"),
     [
-        "POINT EMPTY",
-        "MULTIPOINT(0 0)",
-        "LINESTRING(0 0, 1 1)",
-        "not-wkt",
-        "",
-        "POINT()",
-        "POINT(0)",
-        "POINT(1, 2)",
-        "POINT(nan 0)",
-        "POINT(1 inf)",
-        "POINT(1e400 0)",
+        ("POINT EMPTY", "expected WKT POINT(x y)"),
+        ("MULTIPOINT(0 0)", "expected WKT POINT(x y)"),
+        ("LINESTRING(0 0, 1 1)", "expected WKT POINT(x y)"),
+        ("not-wkt", "expected WKT POINT(x y)"),
+        ("", "expected WKT POINT(x y)"),
+        ("POINT()", "expected two coordinates"),
+        ("POINT(0)", "expected two coordinates"),
+        ("POINT(1, 2)", "coordinates must be numbers"),
+        ("POINT(1 , 2)", "coordinates must be numbers"),
+        ("POINT(x 0)", "coordinates must be numbers"),
+        ("POINT(a b c)", "coordinates must be numbers"),
+        ("POINT(nan 0)", "got x=nan, y=0.0."),
+        ("POINT(1 inf)", "got x=1.0, y=inf."),
+        ("POINT(1e400 0)", "got x=inf, y=0.0."),
     ],
     ids=[
         "empty-geom",
@@ -74,16 +90,22 @@ def test_parse_point_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "no-coords",
         "one-coord",
         "comma",
+        "spaced-comma",
+        "non-numeric",
+        "non-numeric-3-token",
         "nan",
         "inf",
         "overflow",
     ],
 )
-def test_parse_point_wkt_rejects_malformed_or_non_finite(wkt: str) -> None:
+def test_parse_point_wkt_rejects_malformed_or_invalid(wkt: str, expected: str) -> None:
+    # The fragment pins which fault each message names, and the non-finite rows
+    # carry the whole tail: `got x=` alone matches whichever axis prints first.
     parsed = parse_point_wkt(wkt)
 
     assert isinstance(parsed, InvalidCoords)
     assert "Invalid position" in parsed.message
+    assert expected in parsed.message
 
 
 @pytest.mark.parametrize(
@@ -149,39 +171,58 @@ def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "wkt",
+    ("wkt", "expected"),
     [
-        "not-wkt",
-        "",
-        "POLYGON EMPTY",
-        "POLYGON(())",
-        "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 0)))",
-        "LINESTRING(0 0, 1 1)",
-        "POLYGON((0 0, 1 0, 1 1, 0 1))",
-        "POLYGON((0 0, 1 0, 0 0))",
-        "POLYGON((nan 0, 1 0, 1 1, nan 0))",
-        "POLYGON((1 inf, 1 0, 1 1, 1 inf))",
-        "POLYGON((0 0, x 0, 1 1, 0 0))",
+        ("not-wkt", "expected WKT POLYGON"),
+        ("", "expected WKT POLYGON"),
+        ("POLYGON EMPTY", "expected WKT POLYGON"),
+        ("POLYGON(())", "at least four vertices (a closed triangle); in ring 0 got 0."),
+        ("POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, x 1, 2 2, 1 1))", "in ring 1,"),
+        ("POLYGON((0 0 1 0, 1 1, 0 0))", "check for a missing comma"),
+        ("POLYGON(0 0, 1 1)", "expected at least one parenthesized ring"),
+        ("MULTIPOLYGON(((0 0, 1 0, 1 1, 0 0)))", "expected WKT POLYGON"),
+        ("LINESTRING(0 0, 1 1)", "expected WKT POLYGON"),
+        ("POLYGON((0 0, 1 0, 1 1, 0 1))", "must be closed"),
+        ("POLYGON((0 0, 1 0, 0 0))", "in ring 0 got 3."),
+        ("POLYGON((nan 0, 1 0, 1 1, nan 0))", "in ring 0 vertex 0 got: (nan, 0.0)."),
+        ("POLYGON((1 inf, 1 0, 1 1, 1 inf))", "in ring 0 vertex 0 got: (1.0, inf)."),
+        (
+            "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, nan 2, 1 2, 1 1))",
+            "in ring 1 vertex 2 got: (nan, 2.0).",
+        ),
+        ("POLYGON((0 0, x 0, 1 1, 0 0))", "each vertex coordinate must be a number"),
+        (
+            "POLYGON((0 0, a b c, 1 1, 0 0))",
+            "each vertex coordinate must be a number",
+        ),
     ],
     ids=[
         "garbage",
         "blank",
         "empty-geom",
         "empty-ring",
+        "non-numeric-in-hole",
+        "missing-comma",
+        "no-ring",
         "multipolygon",
         "linestring",
         "unclosed-ring",
         "too-few-vertices",
         "nan",
         "inf",
+        "nan-in-hole",
         "non-numeric",
+        "non-numeric-3-token",
     ],
 )
-def test_parse_polygon_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
+def test_parse_polygon_wkt_rejects_malformed_or_invalid(
+    wkt: str, expected: str
+) -> None:
     parsed = parse_polygon_wkt(wkt)
 
     assert isinstance(parsed, InvalidCoords)
     assert "Invalid polygon" in parsed.message
+    assert expected in parsed.message
 
 
 @pytest.mark.parametrize(
@@ -227,17 +268,20 @@ def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
     parsed = parse_multipoint_wkt(wkt)
 
     assert isinstance(parsed, InvalidCoords)
+    assert "not supported" in parsed.message
 
 
 @pytest.mark.parametrize(
-    "wkt",
+    ("wkt", "expected"),
     [
-        "MULTIPOINT EMPTY",
-        "POINT(0 0)",
-        "not-wkt",
-        "",
-        "MULTIPOINT()",
-        "MULTIPOINT((0 0), (x 1))",
+        ("MULTIPOINT EMPTY", "expected WKT MULTIPOINT"),
+        ("POINT(0 0)", "expected WKT MULTIPOINT"),
+        ("not-wkt", "expected WKT MULTIPOINT"),
+        ("", "expected WKT MULTIPOINT"),
+        ("MULTIPOINT()", "at least one position"),
+        ("MULTIPOINT((0 0), (x 1))", "each vertex coordinate must be a number"),
+        ("MULTIPOINT((0 0) (1 1))", "check for a missing comma"),
+        ("MULTIPOINT(0 0 1 1)", "check for a missing comma"),
     ],
     ids=(
         "empty-geom",
@@ -246,12 +290,18 @@ def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "blank",
         "no-points",
         "non-numeric",
+        "missing-comma-parenthesized",
+        "missing-comma-flat",
     ),
 )
-def test_parse_multipoint_wkt_rejects_malformed_or_invalid(wkt: str) -> None:
+def test_parse_multipoint_wkt_rejects_malformed_or_invalid(
+    wkt: str, expected: str
+) -> None:
     parsed = parse_multipoint_wkt(wkt)
 
     assert isinstance(parsed, InvalidCoords)
+    assert "Invalid multipoint" in parsed.message
+    assert expected in parsed.message
 
 
 def test_parse_multipoint_wkt_reports_duplicate_and_non_finite() -> None:
@@ -261,8 +311,12 @@ def test_parse_multipoint_wkt_reports_duplicate_and_non_finite() -> None:
 
     assert isinstance(dup, InvalidCoords)
     assert "unique" in dup.message
+    # MultiPoint's indices must survive the wrapper: restating the rule here, as
+    # parse_point_wkt does for Position, would drop them from every 400.
+    assert "position 1 (0.0, 0.0) repeats position 0 (0.0, 0.0)" in dup.message
     assert isinstance(nan, InvalidCoords)
     assert "finite" in nan.message
+    assert "at position 0 got: (nan, 0.0)" in nan.message
 
 
 def test_parse_position_coords_dispatches_point_and_multipoint() -> None:
