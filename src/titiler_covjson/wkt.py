@@ -284,18 +284,19 @@ def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
     Accepts ``MULTIPOINT((x y), (x y), ...)``, the only spelling OGC 06-103r4
     Section 7.2.2 admits and the one GEOS and PostGIS write, and also the bare
     ``MULTIPOINT(x y, x y, ...)``, which those readers accept though they do not
-    write it, and a mix of the two. The per-point parentheses are stripped so
-    every spelling reduces to one ``x y, x y`` grammar, handing the vertices to
-    :class:`MultiPoint`, which owns the set invariants (at least one position,
-    finite, distinct). Everything else yields an :class:`InvalidCoords`:
+    write it. One list may not mix the two. The per-point parentheses are
+    stripped so either spelling reduces to one ``x y, x y`` grammar, handing the
+    vertices to :class:`MultiPoint`, which owns the set invariants (at least one
+    position, finite, distinct). Everything else yields an
+    :class:`InvalidCoords`:
 
     - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a point with
       three or four numeric coordinates): the 2-D raster backing cannot sample a
       vertical level, so echoing the coordinate back or dropping it would both be
       dishonest;
     - a non-MULTIPOINT geometry, ``MULTIPOINT EMPTY``, an empty point list, a
-      non-finite or non-numeric coordinate, a repeated position, or any other
-      malformed input.
+      list mixing the parenthesized and bare spellings, a non-finite or
+      non-numeric coordinate, a repeated position, or any other malformed input.
 
     Args:
         coords: The raw ``coords`` query value.
@@ -327,24 +328,38 @@ def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
             f"samples a single 2-D raster. Provide a 2-D MULTIPOINT; got {coords!r}."
         )
 
-    # Structure first, because the strip below discards it: without this an
-    # unbalanced `MULTIPOINT((0 0), (1 1)` or a doubled `MULTIPOINT(((0 0)))`
-    # reads as a well-formed point list.
-    if any(
-        _MULTIPOINT_POINT.fullmatch(point.strip()) is None
-        for point in match["points"].split(",")
-    ):
+    # Structure first, because the strip below discards it. Two guards over the
+    # same points: this one judges each point alone, the next judges the list.
+    points = [point.strip() for point in match["points"].split(",")]
+
+    # Alone, a point is exactly `(x y)` or exactly `x y`, so a stray, doubled, or
+    # unbalanced parenthesis fails here. So does a comma missing between
+    # parenthesized points, which fuses them into one unmatchable item; one
+    # missing between bare points leaves `x y x y`, which this admits and the
+    # vertex logic below rejects by its token count.
+    if any(_MULTIPOINT_POINT.fullmatch(point) is None for point in points):
         return InvalidCoords(
             f"Invalid multipoint {coords!r}: malformed point list (check the "
             "parentheses and for a missing comma); expected comma-separated "
             "points, e.g., MULTIPOINT((0 0), (1 1))."
         )
 
+    # As a list, the points must agree on one of those two spellings: the leading
+    # parenthesis sorts them into parenthesized and bare, so two kinds is a mix.
+    # Either spelling is valid on its own, but no WKT grammar permits mixing them
+    # and GEOS refuses it.
+    if len({point.startswith("(") for point in points}) > 1:
+        return InvalidCoords(
+            f"Invalid multipoint {coords!r}: a multipoint must not mix "
+            "parenthesized and bare points; use one spelling throughout, "
+            "e.g., MULTIPOINT((0 0), (1 1)) or MULTIPOINT(0 0, 1 1)."
+        )
+
     # Strip the per-point parentheses so `((x y), (x y))` and `(x y, x y)` reduce
     # to the one `x y, x y, ...` grammar _parse_xy_pairs reads. A strip, not a
-    # findall of parenthesized groups: a mixed `MULTIPOINT((0 0), 1 1)` is
-    # unambiguous, and a findall would silently drop the bare point. Only
-    # balanced parentheses reach here, so nothing is lost by discarding them.
+    # findall of parenthesized groups: findall would return nothing at all for
+    # the bare spelling, silently emptying the list. Only balanced parentheses
+    # reach here, so nothing is lost by discarding them.
     body = match["points"].replace("(", " ").replace(")", " ")
 
     # _parse_xy_pairs rejects a non-2-D or non-numeric point and MultiPoint rejects

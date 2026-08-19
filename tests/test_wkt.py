@@ -311,16 +311,26 @@ def test_parse_multipoint_wkt_accepts_both_forms(
     assert parse_multipoint_wkt(wkt) == MultiPoint(positions=expected)
 
 
-def test_parse_multipoint_wkt_accepts_mixed_parenthesization() -> None:
-    """A mixed ``((x y), x y)`` keeps every point, dropping none.
+@pytest.mark.parametrize(
+    "wkt",
+    [
+        "MULTIPOINT((1 2), 3 4)",
+        "MULTIPOINT(1 2, (3 4))",
+        "MULTIPOINT((1 2), 3 4, (5 6))",
+    ],
+    ids=("parenthesized-first", "bare-first", "parenthesized-outer"),
+)
+def test_parse_multipoint_wkt_rejects_mixed_parenthesization(wkt: str) -> None:
+    """One spelling per multipoint: the two may not be mixed within one list.
 
-    This locks the strip-not-findall decision: stripping the per-point parens
-    reduces both spellings to one grammar, whereas collecting parenthesized
-    groups would silently discard the bare ``3 4`` here.
+    Each spelling is accepted on its own, but a list mixing them is refused by
+    every WKT grammar and by GEOS, so accepting it here would be a leniency no
+    producer needs and no other reader shares.
     """
-    parsed = parse_multipoint_wkt("MULTIPOINT((1 2), 3 4)")
+    parsed = parse_multipoint_wkt(wkt)
 
-    assert parsed == MultiPoint(positions=((1.0, 2.0), (3.0, 4.0)))
+    assert isinstance(parsed, InvalidCoords)
+    assert "must not mix" in parsed.message
 
 
 @pytest.mark.parametrize(
