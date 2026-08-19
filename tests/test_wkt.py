@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from titiler_covjson.geometry import MultiPoint, Polygon, Position
@@ -238,7 +240,9 @@ def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         ("", "expected WKT POLYGON"),
         ("POLYGON EMPTY", "expected WKT POLYGON"),
         ("POLYGON(())", "at least four vertices (a closed triangle); in ring 0 got 0."),
-        ("POLYGON((0 0, 1 0, 1 1, 0 0) JUNK (2 2, 3 2, 3 3, 2 2))", "unexpected text"),
+        ("POLYGON((0 0, 1 0, 1 1, 0 0) JUNK (2 2, 3 2, 3 3, 2 2))", "malformed ring"),
+        ("POLYGON((0 0, 1 0, 1 1, 0 0) (2 2, 3 2, 3 3, 2 2))", "malformed ring"),
+        ("POLYGON((0 0, 1 0, 1 1, 0 0) ,, (2 2, 3 2, 3 3, 2 2))", "malformed ring"),
         ("POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, x 1, 2 2, 1 1))", "in ring 1,"),
         ("POLYGON((0 0 1 0, 1 1, 0 0))", "check for a missing comma"),
         ("POLYGON(0 0, 1 1)", "expected at least one parenthesized ring"),
@@ -264,6 +268,8 @@ def test_parse_polygon_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "empty-geom",
         "empty-ring",
         "junk-between-rings",
+        "missing-comma-between-rings",
+        "doubled-comma-between-rings",
         "non-numeric-in-hole",
         "missing-comma",
         "no-ring",
@@ -343,7 +349,11 @@ def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         ("", "expected WKT MULTIPOINT"),
         ("MULTIPOINT()", "at least one position"),
         ("MULTIPOINT((0 0), (x 1))", "each vertex coordinate must be a number"),
-        ("MULTIPOINT((0 0) (1 1))", "check for a missing comma"),
+        ("MULTIPOINT((0 0) (1 1))", "malformed point list"),
+        ("MULTIPOINT((0 0, (1 1))", "malformed point list"),
+        ("MULTIPOINT((0 0)), (1 1))", "malformed point list"),
+        ("MULTIPOINT(((0 0)), ((1 1)))", "malformed point list"),
+        ("MULTIPOINT((0 0), (1 1)", "malformed point list"),
         ("MULTIPOINT(0 0 1 1)", "check for a missing comma"),
     ],
     ids=(
@@ -354,6 +364,10 @@ def test_parse_multipoint_wkt_rejects_vertical_or_measured(wkt: str) -> None:
         "no-points",
         "non-numeric",
         "missing-comma-parenthesized",
+        "unbalanced-open-paren",
+        "unbalanced-close-paren",
+        "doubled-parens",
+        "unclosed-point-list",
         "missing-comma-flat",
     ),
 )
@@ -365,6 +379,26 @@ def test_parse_multipoint_wkt_rejects_malformed_or_invalid(
     assert isinstance(parsed, InvalidCoords)
     assert "Invalid multipoint" in parsed.message
     assert expected in parsed.message
+
+
+def test_parse_multipoint_wkt_rejects_a_long_malformed_list_promptly() -> None:
+    """Structural rejection stays linear, so ``coords`` cannot pin a worker.
+
+    The point list is checked one point at a time rather than with a single
+    pattern spanning the whole list. A spanning pattern lets a bare point's own
+    characters and the separator's optional whitespace consume the same run two
+    different ways, so a rejection walks every split before reporting: input
+    this size took about a minute. ``coords`` arrives straight off a public
+    query string, which makes that a denial of service rather than a slow test.
+    """
+    coords = "MULTIPOINT(" + " " * 4000 + "()"
+
+    start = time.perf_counter()
+    parsed = parse_multipoint_wkt(coords)
+    elapsed = time.perf_counter() - start
+
+    assert isinstance(parsed, InvalidCoords)
+    assert elapsed < 1.0, f"structural rejection took {elapsed:.3f}s"
 
 
 def test_parse_multipoint_wkt_reports_duplicate_and_non_finite() -> None:

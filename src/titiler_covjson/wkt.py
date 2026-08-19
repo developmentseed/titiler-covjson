@@ -49,19 +49,35 @@ _POLYGON_WKT = re.compile(
     r"^\s*POLYGON\s*(?P<tag>ZM|Z|M)?\s*\((?P<rings>.*)\)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
-_POLYGON_RING = re.compile(r"\(([^()]*)\)")
+
+# One ring, and the comma-separated list of rings a polygon body must be, sharing
+# one source string: findall extracts the rings, fullmatch says the list holding
+# them is well-formed. The `_SRC` suffix marks the raw pattern text, since the two
+# below are compiled and only the text can be interpolated into another pattern.
+_RING_SRC = r"\(([^()]*)\)"
+_POLYGON_RING = re.compile(_RING_SRC)
+_POLYGON_RING_LIST = re.compile(rf"\s*{_RING_SRC}(?:\s*,\s*{_RING_SRC})*\s*")
 
 # WKT for a multipoint: `MULTIPOINT`, an optional Z/M/ZM tag, then the point list
 # in parentheses. parse_multipoint_wkt inspects the tag and strips the per-point
-# parentheses (WKT permits both `((x y), (x y))` and `(x y, x y)`) so both reduce
-# to the one `x y, x y, ...` grammar. POINT fails this pattern (no leading
-# `MULTI`) and MULTIPOINT fails _POINT_WKT (anchored on `POINT`), so the two are
-# disjoint; `MULTIPOINT EMPTY` fails it too (no parentheses), which is the
-# rejection.
+# parentheses so both spellings reduce to the one `x y, x y, ...` grammar. POINT
+# fails this pattern (no leading `MULTI`) and MULTIPOINT fails _POINT_WKT
+# (anchored on `POINT`), so the two are disjoint; `MULTIPOINT EMPTY` fails it too
+# (no parentheses), which is the rejection.
 _MULTIPOINT_WKT = re.compile(
     r"^\s*MULTIPOINT\s*(?P<tag>ZM|Z|M)?\s*\((?P<points>.*)\)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+
+# One point of a multipoint's list, parenthesized or bare. Deliberately matches a
+# single point and not the list: a pattern spanning the list would let a bare
+# point's `[^(),]*` and the separator's own whitespace consume one run of spaces
+# two different ways, so rejecting a long malformed list would walk every split
+# (about a minute for a 4 KB value). Splitting on WKT's separator first and
+# matching each point alone keeps the work linear, which matters because `coords`
+# arrives straight off a public query string. An empty point matches, leaving
+# `MULTIPOINT()` to MultiPoint's own "at least one position" rule.
+_MULTIPOINT_POINT = re.compile(r"\([^(),]*\)|[^(),]*")
 
 # A coordinate token, checked before `float` reads it: `float` also accepts PEP
 # 515 underscores (`1_000`) and any Unicode decimal digit (`١٢`), silently
@@ -234,13 +250,14 @@ def parse_polygon_wkt(coords: str) -> Polygon | InvalidCoords:
             "e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."
         )
 
-    # findall keeps only the parenthesized groups, so text between or after them
-    # would otherwise be dropped in silence and a `POLYGON((...) JUNK (...))`
-    # would read as a well-formed two-ring polygon. Only separators may remain.
-    if _POLYGON_RING.sub(" ", match["rings"]).strip(" ,\t\n\r"):
+    # findall keeps only the parenthesized groups, so anything between or after
+    # them would otherwise be dropped in silence and a `POLYGON((...) JUNK (...))`
+    # would read as a well-formed two-ring polygon.
+    if _POLYGON_RING_LIST.fullmatch(match["rings"]) is None:
         return InvalidCoords(
-            f"Invalid polygon {coords!r}: unexpected text outside the rings; "
-            "expected only commas between parenthesized rings."
+            f"Invalid polygon {coords!r}: malformed ring list; expected "
+            "parenthesized rings separated by single commas, e.g., "
+            "POLYGON((0 0, 4 0, 4 4, 0 0), (1 1, 2 1, 2 2, 1 1))."
         )
 
     # Ring by ring, so a vertex fault names the ring it came from; Polygon's own
@@ -264,12 +281,13 @@ def parse_polygon_wkt(coords: str) -> Polygon | InvalidCoords:
 def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
     """Parse a 2-D WKT ``MULTIPOINT`` into a :class:`MultiPoint`.
 
-    Accepts both WKT spellings of a multipoint, ``MULTIPOINT((x y), (x y), ...)``
-    and ``MULTIPOINT(x y, x y, ...)``, and even a mix of the two; the per-point
-    parentheses are stripped so both reduce to one ``x y, x y`` grammar, handing
-    the vertices to :class:`MultiPoint`, which owns the set invariants (at least
-    one position, finite, distinct). Everything else yields an
-    :class:`InvalidCoords`:
+    Accepts ``MULTIPOINT((x y), (x y), ...)``, the only spelling OGC 06-103r4
+    Section 7.2.2 admits and the one GEOS and PostGIS write, and also the bare
+    ``MULTIPOINT(x y, x y, ...)``, which those readers accept though they do not
+    write it, and a mix of the two. The per-point parentheses are stripped so
+    every spelling reduces to one ``x y, x y`` grammar, handing the vertices to
+    :class:`MultiPoint`, which owns the set invariants (at least one position,
+    finite, distinct). Everything else yields an :class:`InvalidCoords`:
 
     - a 3-D or measured geometry (a ``Z`` / ``M`` / ``ZM`` tag, or a point with
       three or four numeric coordinates): the 2-D raster backing cannot sample a
@@ -309,11 +327,24 @@ def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
             f"samples a single 2-D raster. Provide a 2-D MULTIPOINT; got {coords!r}."
         )
 
+    # Structure first, because the strip below discards it: without this an
+    # unbalanced `MULTIPOINT((0 0), (1 1)` or a doubled `MULTIPOINT(((0 0)))`
+    # reads as a well-formed point list.
+    if any(
+        _MULTIPOINT_POINT.fullmatch(point.strip()) is None
+        for point in match["points"].split(",")
+    ):
+        return InvalidCoords(
+            f"Invalid multipoint {coords!r}: malformed point list (check the "
+            "parentheses and for a missing comma); expected comma-separated "
+            "points, e.g., MULTIPOINT((0 0), (1 1))."
+        )
+
     # Strip the per-point parentheses so `((x y), (x y))` and `(x y, x y)` reduce
     # to the one `x y, x y, ...` grammar _parse_xy_pairs reads. A strip, not a
     # findall of parenthesized groups: a mixed `MULTIPOINT((0 0), 1 1)` is
-    # unambiguous, and a findall would silently drop the bare point. Paren
-    # structure itself is not validated (an unbalanced one is read leniently).
+    # unambiguous, and a findall would silently drop the bare point. Only
+    # balanced parentheses reach here, so nothing is lost by discarding them.
     body = match["points"].replace("(", " ").replace(")", " ")
 
     # _parse_xy_pairs rejects a non-2-D or non-numeric point and MultiPoint rejects
@@ -448,6 +479,12 @@ def _parse_xy_pairs(pairs: str) -> tuple[tuple[float, float], ...]:
 
     vertices: list[tuple[float, float]] = []
 
+    # A grammar validates the ring and point lists above; the vertices here stay
+    # in logic, deliberately. A misplaced parenthesis in a list has no diagnosis
+    # better than "malformed", but a vertex's token count names its fault
+    # exactly: two is a vertex, three is a refused 3-D coordinate, and anything
+    # else is a dropped separator. A grammar strict enough to reject all three
+    # would report one "malformed vertex list" for every one of them.
     for pair in pairs.split(","):
         tokens = pair.split()
 
