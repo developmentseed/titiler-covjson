@@ -73,12 +73,15 @@ class Position:
             ValueError: If ``x``, ``y``, or a non-``None`` ``z`` is not finite
                 (NaN or infinity).
         """
-        finite = (self.x, self.y) if self.z is None else (self.x, self.y, self.z)
+        # Name each coordinate where its field is read, so the check and the
+        # message it reports cannot disagree about which axis is which.
+        z_axis = () if self.z is None else (("z", self.z),)
+        axes = (("x", self.x), ("y", self.y), *z_axis)
 
-        if not all(map(math.isfinite, finite)):
+        if not all(math.isfinite(value) for _, value in axes):
+            got = ", ".join(f"{axis}={value}" for axis, value in axes)
             msg = (
-                "Position coordinates must be finite (not NaN or infinity); got "
-                f"x={self.x}, y={self.y}, z={self.z}."
+                f"Position coordinates must be finite (not NaN or infinity); got {got}."
             )
             raise ValueError(msg)
 
@@ -119,29 +122,33 @@ class Polygon:
             msg = "A polygon must have at least one ring (the exterior ring)."
             raise ValueError(msg)
 
-        coordinates = [
-            coordinate
-            for ring in self.rings
-            for vertex in ring
-            for coordinate in vertex
-        ]
+        # Report where, not just what: a ring can carry hundreds of vertices, and
+        # `1e400` arrives already coerced to `inf`, so only an index leads back to
+        # the text. Scanned before the per-ring rules so a non-finite coordinate
+        # is reported ahead of a short or unclosed ring.
+        for ring_index, ring in enumerate(self.rings):
+            for vertex_index, vertex in enumerate(ring):
+                if not all(map(math.isfinite, vertex)):
+                    msg = (
+                        "Polygon coordinates must be finite (not NaN or infinity); "
+                        f"in ring {ring_index} vertex {vertex_index} got: {vertex}."
+                    )
+                    raise ValueError(msg)
 
-        if not all(map(math.isfinite, coordinates)):
-            msg = "Polygon coordinates must be finite (not NaN or infinity)."
-            raise ValueError(msg)
-
-        for ring in self.rings:
+        # Ring index for the reason given above: which ring failed is not
+        # recoverable from the rule alone once a polygon carries holes.
+        for ring_index, ring in enumerate(self.rings):
             if len(ring) < 4:
                 msg = (
                     "Each polygon ring must have at least four vertices "
-                    f"(a closed triangle); got {len(ring)}."
+                    f"(a closed triangle); in ring {ring_index} got {len(ring)}."
                 )
                 raise ValueError(msg)
 
             if ring[0] != ring[-1]:
                 msg = (
                     "Each polygon ring must be closed (first vertex equal to last); "
-                    f"got {ring[0]} != {ring[-1]}."
+                    f"in ring {ring_index} got: {ring[0]} != {ring[-1]}."
                 )
                 raise ValueError(msg)
 
@@ -205,25 +212,30 @@ class MultiPoint:
             msg = "A multipoint must have at least one position."
             raise ValueError(msg)
 
-        if not all(
-            math.isfinite(coordinate)
-            for position in self.positions
-            for coordinate in position
-        ):
-            msg = "MultiPoint coordinates must be finite (not NaN or infinity)."
-            raise ValueError(msg)
+        # Index and value, for the reason given in Polygon.
+        for index, position in enumerate(self.positions):
+            if not all(map(math.isfinite, position)):
+                msg = (
+                    "MultiPoint coordinates must be finite (not NaN or infinity); "
+                    f"at position {index} got: {position}."
+                )
+                raise ValueError(msg)
 
-        # Distinct positions. A MultiPoint domain lists these as a coverage axis,
-        # whose values index the range: a repeated position would leave "which
-        # range element does this refer to?" ambiguous. The CoverageJSON schema
-        # (OGC 21-069r2) makes this concrete. Its `valuesAxisBase.values` declares
-        # `uniqueItems: true`, so a duplicate serializes to a schema-invalid
-        # document. Note that -0.0 and 0.0 collide here exactly as they do under
-        # the schema's uniqueness test (both compare equal), so this check and the
-        # schema agree on every pair.
-        if len(set(self.positions)) != len(self.positions):
-            msg = (
-                "MultiPoint positions must be unique; "
-                "a coverage axis cannot index a value twice."
-            )
-            raise ValueError(msg)
+        # Distinct positions. A MultiPoint domain lists these as a coverage axis
+        # whose values index the range, so a repeat leaves "which range element?"
+        # ambiguous; the CoverageJSON schema (OGC 21-069r2) makes that concrete by
+        # declaring `valuesAxisBase.values` `uniqueItems: true`. Both indices are
+        # reported, since naming one leaves the requester hunting its twin. -0.0
+        # and 0.0 compare equal as `dict` keys, as `set` members, and under the
+        # schema's test, so this check, the `len(set(...))` form it replaced, and
+        # the schema agree on every pair.
+        first_seen: dict[tuple[float, float], int] = {}
+
+        for index, position in enumerate(self.positions):
+            if (earlier := first_seen.setdefault(position, index)) != index:
+                msg = (
+                    "MultiPoint positions must be unique (a coverage axis cannot "
+                    f"index a value twice); position {index} {position} repeats "
+                    f"position {earlier} {self.positions[earlier]}."
+                )
+                raise ValueError(msg)
