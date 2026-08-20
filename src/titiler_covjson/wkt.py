@@ -81,14 +81,11 @@ _POLYGON_WKT = _geometry_wkt("POLYGON", r".*")
 # One ring, and the comma-separated list of rings a polygon body must be: findall
 # extracts the rings, fullmatch says the list holding them is well-formed. The
 # `_SRC` suffix marks raw pattern text, since only text can be interpolated into
-# another pattern; the list only answers yes or no, so it takes the non-capturing
-# spelling and leaves the capturing one to the findall that reads the groups.
+# another pattern. The list repeats that text and so repeats its group, which is
+# harmless: the list is only ever read for whether it matched, never for groups.
 _RING_SRC = r"\(([^()]*)\)"
-_RING_SRC_NOCAPTURE = r"\([^()]*\)"
 _POLYGON_RING = re.compile(_RING_SRC)
-_POLYGON_RING_LIST = re.compile(
-    rf"\s*{_RING_SRC_NOCAPTURE}(?:\s*,\s*{_RING_SRC_NOCAPTURE})*\s*"
-)
+_POLYGON_RING_LIST = re.compile(rf"\s*{_RING_SRC}(?:\s*,\s*{_RING_SRC})*\s*")
 
 # WKT for a multipoint: `MULTIPOINT`, an optional Z/M/ZM tag, then the point list
 # in parentheses. parse_multipoint_wkt inspects the tag and strips the per-point
@@ -105,8 +102,9 @@ _MULTIPOINT_WKT = _geometry_wkt("MULTIPOINT", r".*")
 # (about a minute for a 4 KB value). Splitting on WKT's separator first and
 # matching each point alone keeps the work linear, which matters because `coords`
 # arrives straight off a public query string. An empty point matches, leaving
-# `MULTIPOINT()` to MultiPoint's own "at least one position" rule.
-_MULTIPOINT_POINT = re.compile(r"\([^(),]*\)|[^(),]*")
+# `MULTIPOINT()` to MultiPoint's own "at least one position" rule, which the
+# caller reaches by not splitting an empty body at all.
+_MULTIPOINT_POINT = re.compile(r"\([^(),]*\)|[^(),]+")
 
 # A coordinate token, checked before `float` reads it: `float` also accepts PEP
 # 515 underscores (`1_000`) and any Unicode decimal digit (`١٢`), silently
@@ -366,18 +364,21 @@ def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
 
     # Structure first, because the strip below discards it. Two guards over the
     # same points: this one judges each point alone, the next judges the list.
-    points = [point.strip() for point in match["body"].split(",")]
+    # An empty body is no points, not one empty point: splitting it would yield a
+    # blank item that reads as malformed and hides MultiPoint's emptiness rule.
+    body = match["body"].strip()
+    points = [point.strip() for point in body.split(",")] if body else []
 
-    # Alone, a point is exactly `(x y)` or exactly `x y`, so a stray, doubled, or
-    # unbalanced parenthesis fails here. So does a comma missing between
-    # parenthesized points, which fuses them into one unmatchable item; one
-    # missing between bare points leaves `x y x y`, which this admits and the
-    # vertex logic below rejects by its token count.
+    # Alone, a point is exactly `(x y)` or exactly `x y`, never nothing, so a
+    # stray paren fails here, and so does a stray comma, which leaves an empty
+    # point beside a real one. A comma missing between parenthesized points fails
+    # too, fusing them into one unmatchable item; one missing between bare points
+    # leaves `x y x y`, which the vertex logic below rejects by token count.
     if any(_MULTIPOINT_POINT.fullmatch(point) is None for point in points):
         return InvalidCoords(
             f"Invalid multipoint {coords!r}: malformed point list (check the "
-            "parentheses and for a missing comma); expected comma-separated "
-            "points, e.g., MULTIPOINT((0 0), (1 1))."
+            "parentheses and the commas); expected comma-separated points, "
+            "e.g., MULTIPOINT((0 0), (1 1))."
         )
 
     # As a list, the points must agree on one of those two spellings: the leading
@@ -396,7 +397,7 @@ def parse_multipoint_wkt(coords: str) -> MultiPoint | InvalidCoords:
     # findall of parenthesized groups: findall would return nothing at all for
     # the bare spelling, silently emptying the list. Only balanced parentheses
     # reach here, so nothing is lost by discarding them.
-    flattened = match["body"].replace("(", " ").replace(")", " ")
+    flattened = body.replace("(", " ").replace(")", " ")
 
     # _parse_xy_pairs rejects a non-2-D or non-numeric point and MultiPoint rejects
     # an empty, non-finite, or duplicate set; one handler covers every ValueError.
