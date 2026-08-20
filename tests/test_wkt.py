@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 import pytest
 
@@ -391,24 +392,43 @@ def test_parse_multipoint_wkt_rejects_malformed_or_invalid(
     assert expected in parsed.message
 
 
-def test_parse_multipoint_wkt_rejects_a_long_malformed_list_promptly() -> None:
-    """Structural rejection stays linear, so ``coords`` cannot pin a worker.
+@pytest.mark.parametrize(
+    ("parse", "coords"),
+    [
+        (parse_point_wkt, "POINT(" + " " * 4000),
+        (parse_point_wkt, "POINT(" + "9" * 16000 + "x 0)"),
+        (parse_polygon_wkt, "POLYGON((" + " " * 4000),
+        (parse_polygon_wkt, "POLYGON((0 0, " + "9" * 16000 + "x 0))"),
+        (parse_multipoint_wkt, "MULTIPOINT(" + " " * 4000 + "()"),
+        (parse_multipoint_wkt, "MULTIPOINT(" + "9" * 16000 + "x 0)"),
+    ],
+    ids=[
+        "point-body-padding",
+        "point-long-token",
+        "polygon-ring-padding",
+        "polygon-long-token",
+        "multipoint-list-padding",
+        "multipoint-long-token",
+    ],
+)
+def test_parsers_reject_long_malformed_coords_promptly(
+    parse: Callable[[str], object], coords: str
+) -> None:
+    """Rejecting a long malformed value stays linear, so it cannot pin a worker.
 
-    The point list is checked one point at a time rather than with a single
-    pattern spanning the whole list. A spanning pattern lets a bare point's own
-    characters and the separator's optional whitespace consume the same run two
-    different ways, so a rejection walks every split before reporting: input
-    this size took about a minute. ``coords`` arrives straight off a public
-    query string, which makes that a denial of service rather than a slow test.
+    ``coords`` arrives straight off a public query string with no length bound,
+    so a pattern whose quantifiers can split one run of characters more than one
+    way turns a rejection into a denial of service: the engine walks every split
+    before reporting. Each payload here is refused either way; only the time
+    taken distinguishes a sound pattern from a ruinous one, and each of these
+    took seconds to minutes before the patterns were made unambiguous.
     """
-    coords = "MULTIPOINT(" + " " * 4000 + "()"
-
     start = time.perf_counter()
-    parsed = parse_multipoint_wkt(coords)
+    parsed = parse(coords)
     elapsed = time.perf_counter() - start
 
     assert isinstance(parsed, InvalidCoords)
-    assert elapsed < 1.0, f"structural rejection took {elapsed:.3f}s"
+    assert elapsed < 1.0, f"rejection took {elapsed:.3f}s"
 
 
 def test_parse_multipoint_wkt_reports_duplicate_and_non_finite() -> None:
