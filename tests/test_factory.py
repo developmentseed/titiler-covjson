@@ -4,12 +4,18 @@ import numpy as np
 import pytest
 import rasterio
 from conftest import validate_covjson
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData, Info, PointData
-from titiler.core.errors import BadRequestError
+from titiler.core.errors import (
+    DEFAULT_STATUS_CODES,
+    BadRequestError,
+    add_exception_handlers,
+)
 
 from titiler_covjson.factory import (
+    DEFAULT_MAX_COORDS_LENGTH,
     CovJSONFactory,
     _output_grid_dimensions,
     _resolve_grid_dimensions,
@@ -17,6 +23,13 @@ from titiler_covjson.factory import (
     _resolve_unread_bands,
 )
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
+
+# A path item's keys are HTTP operations plus optional non-operation members
+# (`parameters`, `summary`, `servers`, `$ref`), whose values are not operation
+# objects. Only the operations carry parameters.
+_HTTP_METHODS = frozenset(
+    {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
+)
 
 
 def two_band_info(dtype: str = "int16") -> Info:
@@ -337,6 +350,16 @@ def test_bbox_downsamples_to_default_max_size(
 def test_factory_rejects_max_cells_below_default_max_size_squared() -> None:
     with pytest.raises(ValueError, match="max_cells"):
         CovJSONFactory(default_max_size=4, max_cells=1)
+
+
+@pytest.mark.parametrize("max_coords_length", [0, -1])
+def test_factory_rejects_non_positive_max_coords_length(
+    max_coords_length: int,
+) -> None:
+    # Zero builds a factory that rejects every request, and a negative value
+    # otherwise fails inside pydantic naming neither the field nor the factory.
+    with pytest.raises(ValueError, match="max_coords_length"):
+        CovJSONFactory(max_coords_length=max_coords_length)
 
 
 @pytest.mark.parametrize(
@@ -1118,6 +1141,57 @@ def test_position_multipoint_exceeds_max_samples(
     assert "positions" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("path", "coords"),
+    [
+        ("/position", "MULTIPOINT((0 0), (1 1), (2 2), (3 3))"),
+        ("/area", "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"),
+    ],
+)
+def test_rejects_coords_over_max_length(path: str, coords: str) -> None:
+    # Over-long coords is refused during request validation, so the handler never
+    # runs: an unreadable url that would otherwise be a 500 stays a 422. Send only
+    # url and coords, since a z/f/stat guard would raise a 400 that masks this.
+    max_coords_length = 32
+
+    assert len(coords) > max_coords_length, "coords must exceed the cap to be refused"
+
+    response = _coords_capped_client(max_coords_length).get(
+        path,
+        params={"url": "/no/such/file.tif", "coords": coords},
+    )
+
+    assert response.status_code == 422, response.text
+    error = response.json()["detail"][0]
+    assert error["type"] == "string_too_long", error
+    assert error["loc"] == ["query", "coords"], error
+
+
+def test_every_coords_parameter_is_bounded() -> None:
+    # Discover the coords parameters rather than naming the routes that have one
+    # today, so a route added later that omits the cap fails this test instead of
+    # going unchecked. Configure the cap here and compare against it, so the
+    # expected bound has one source: a non-default value proves the field reaches
+    # the declaration rather than a constant hard-coded beside it.
+    max_coords_length = 32
+
+    bounds = _published_coords_bounds(_coords_capped_client(max_coords_length))
+
+    assert bounds, "no operations define a coords parameter"
+    assert all(bound == max_coords_length for bound in bounds.values()), bounds
+
+
+def test_default_factory_bounds_coords(client: TestClient) -> None:
+    # Every other test here configures a small cap of its own, so without this one
+    # DEFAULT_MAX_COORDS_LENGTH could be raised to any value, or the field default
+    # dropped, with the suite still green. An unconfigured deployment being bounded
+    # is the property the cap exists for.
+    bounds = _published_coords_bounds(client)
+
+    assert bounds, "no operations define a coords parameter"
+    assert all(bound == DEFAULT_MAX_COORDS_LENGTH for bound in bounds.values()), bounds
+
+
 def test_position_multipoint_rejects_out_of_range_band(
     client: TestClient, cog_path: str
 ) -> None:
@@ -1565,3 +1639,43 @@ def test_area_rejects_unsupported_format(client: TestClient, cog_path: str) -> N
 def test_area_requires_coords(client: TestClient, cog_path: str) -> None:
     response = client.get("/area", params={"url": cog_path})
     assert response.status_code == 422, response.text
+
+
+def _published_coords_bounds(client: TestClient) -> dict[str, int | None]:
+    """Map each published ``coords`` parameter to the ``maxLength`` it declares.
+
+    Discovers the parameters from the served schema rather than naming the routes
+    that have one today, so a route added later is covered without being listed.
+
+    Args:
+        client: Client over the app whose schema is inspected.
+
+    Returns:
+        dict[str, int | None]: Bound per operation, ``None`` where none is declared.
+    """
+    schema = client.get("/openapi.json").json()
+
+    return {
+        f"{method.upper()} {path}": parameter["schema"].get("maxLength")
+        for path, operations in schema["paths"].items()
+        for method, operation in operations.items()
+        if method in _HTTP_METHODS
+        for parameter in operation.get("parameters", [])
+        if parameter["name"] == "coords"
+    }
+
+
+def _coords_capped_client(max_coords_length: int) -> TestClient:
+    """Build a TestClient over a factory with the given ``coords`` length cap.
+
+    Args:
+        max_coords_length: The factory's cap on the length of ``coords``.
+
+    Returns:
+        TestClient: Client bound to an app mounting the configured factory.
+    """
+    app = FastAPI()
+    app.include_router(CovJSONFactory(max_coords_length=max_coords_length).router)
+    add_exception_handlers(app, DEFAULT_STATUS_CODES)
+
+    return TestClient(app)

@@ -426,14 +426,15 @@ def test_parsers_reject_long_malformed_coords_promptly(
 ) -> None:
     """Rejecting a long malformed value stays linear, so it cannot pin a worker.
 
-    ``coords`` arrives straight off a public query string with no length bound,
-    so a pattern whose quantifiers can split one run of characters more than one
-    way turns a rejection into a denial of service: the engine walks every split
-    before reporting. Every payload here is refused either way, and only the time
-    taken tells a sound pattern from a ruinous one. Four of them did take that
-    long once, from about two seconds to about eleven. The rest aim at list
-    patterns that are sound today, whose repetition a later edit could make
-    ambiguous without any other case noticing.
+    ``coords`` arrives straight off a public query string, bounded only by
+    ``max_coords_length``, which admits values many times longer than these.
+    So a pattern whose quantifiers can split one run of characters more than
+    one way turns a rejection into a denial of service: the engine walks every
+    split before reporting. Every payload here is refused either way, and only
+    the time taken tells a sound pattern from a ruinous one. Four of them did
+    take that long once, from about two seconds to about eleven. The rest aim
+    at list patterns that are sound today, whose repetition a later edit could
+    make ambiguous without any other case noticing.
     """
     start = time.perf_counter()
     parsed = parse(coords)
