@@ -84,9 +84,18 @@ DEFAULT_MAX_SIZE = 1024
 
 # The default cap on the number of positions a single MULTIPOINT may name. It
 # bounds the number of point reads (one per position), a distinct resource from
-# max_cells (which bounds one array allocation). A backstop against a large
-# request, not a promised contract: typical query-string limits bind first.
+# max_cells (which bounds one array allocation) and from max_coords_length
+# (which bounds the text parsed to find them).
 DEFAULT_MAX_SAMPLES = 1000
+
+# The default cap on the length of the `coords` query parameter, in characters
+# rather than bytes: the parsers run on the decoded string, so parse cost tracks
+# characters. It is the only cap that bounds the parse itself: max_samples is
+# counted after `coords` has been parsed in full, so that work is already spent.
+# Deliberately larger than a default uvicorn will even accept: most servers
+# reject an overly-long query string before it reaches us, and this cap is here
+# for the deployments whose server allows a longer one through.
+DEFAULT_MAX_COORDS_LENGTH = 256 * 1024
 
 # CRS84 is WGS84 with longitude/latitude axis order (the CovJSON-preferred label
 # for geographic output). It is distinct from EPSG:4326 (latitude/longitude
@@ -110,6 +119,10 @@ class CovJSONFactory(BaseFactory):
     ``/area``; and ``max_samples``, the cap on the number of positions a
     ``/position`` ``MULTIPOINT`` may name (each is one point read). A single
     ``POINT`` needs none of the three.
+
+    A fourth knob, ``max_coords_length``, bounds the length in characters of
+    ``coords`` on ``/position`` and ``/area``; an overly-long value is rejected
+    during request validation, before the dataset is opened.
     """
 
     reader: type[Reader] = Reader
@@ -120,20 +133,32 @@ class CovJSONFactory(BaseFactory):
     default_max_size: int = DEFAULT_MAX_SIZE
     max_cells: int = DEFAULT_MAX_SIZE * DEFAULT_MAX_SIZE
     max_samples: int = DEFAULT_MAX_SAMPLES
+    max_coords_length: int = DEFAULT_MAX_COORDS_LENGTH
 
     def __attrs_post_init__(self) -> None:
-        """Validate the sizing invariant, then register routes (base init).
+        """Validate the configured limits, then register routes (base init).
 
         Raises:
             ValueError: If ``max_cells < default_max_size ** 2``. A full-extent
                 read at the downsampling default could otherwise exceed the
                 ceiling and be wrongly rejected.
+            ValueError: If ``max_coords_length < 1``. Zero would build a
+                factory that rejects every non-empty ``coords``, and a negative
+                value fails deep in the validation library with a message naming
+                neither the field nor the factory.
         """
         if self.max_cells < self.default_max_size**2:
             msg = (
                 f"max_cells ({self.max_cells}) must be >= default_max_size ** 2 "
                 f"({self.default_max_size**2}); otherwise a full-extent read at "
                 "the downsampling default could exceed the cell-count ceiling."
+            )
+            raise ValueError(msg)
+
+        if self.max_coords_length < 1:
+            msg = (
+                f"max_coords_length ({self.max_coords_length}) must be >= 1; "
+                "zero admits only an empty value, and a negative is not a length."
             )
             raise ValueError(msg)
 
@@ -215,11 +240,9 @@ class CovJSONFactory(BaseFactory):
         def position_coverage(
             coords: Annotated[
                 str,
-                Query(
-                    description=(
-                        "Position(s) as WKT: POINT(x y) or "
-                        "MULTIPOINT((x y), ...), e.g., POINT(0 0)."
-                    ),
+                self._coords_query(
+                    "Position(s) as WKT: POINT(x y) or "
+                    "MULTIPOINT((x y), ...), e.g., POINT(0 0)."
                 ),
             ],
             src_path: Annotated[str, Depends(self.path_dependency)],
@@ -305,7 +328,7 @@ class CovJSONFactory(BaseFactory):
         def area_coverage(
             coords: Annotated[
                 str,
-                Query(description="Area as WKT, e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."),
+                self._coords_query("Area as WKT, e.g., POLYGON((0 0, 1 0, 1 1, 0 0))."),
             ],
             src_path: Annotated[str, Depends(self.path_dependency)],
             band_params: Annotated[CovJSONBandParams, Depends(self.band_dependency)],
@@ -340,6 +363,20 @@ class CovJSONFactory(BaseFactory):
             )
 
             return _covjson_response(to_coverage(polygon_input), label_crs)
+
+    def _coords_query(self, description: str) -> Any:
+        """Declare a bounded ``coords`` query parameter.
+
+        Every route taking WKT ``coords`` builds its parameter here, so the
+        configured length cap reaches each one without being repeated per route.
+
+        Args:
+            description: The parameter description shown in the API schema.
+
+        Returns:
+            Any: A ``Query`` declaration carrying the configured length cap.
+        """
+        return Query(description=description, max_length=self.max_coords_length)
 
 
 def _covjson_response(coverage: Coverage, label_crs: rasterio.CRS) -> CovJSONResponse:
