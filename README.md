@@ -34,7 +34,8 @@ dataset, each returning a CoverageJSON coverage in its own domain.
 
   All three support band selection (`bidx` / `expression` / the OGC API -
   Environmental Data Retrieval (EDR) `parameter-name` alias) and a single `crs`
-  knob.
+  knob. On `/position` and `/area`, the length of `coords` is capped by
+  `max_coords_length`, so an overly-long value is rejected before it is parsed.
 - **Planned:** transect (trajectory), temporal (time series) extraction, further
   coverage domains, and multi-dataset / STAC sources.
 
