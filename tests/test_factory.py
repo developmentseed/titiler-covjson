@@ -446,10 +446,16 @@ def test_bbox_expression_bands_count_toward_ceiling(
 ) -> None:
     # An expression evaluates each ;-separated block into its own full-size
     # array, so N blocks allocate N times the grid. Over this single-band 4x4
-    # source the grid alone is 16 cells, exactly the ceiling, so the expression
+    # source a named 4x4 grid is 16 cells, exactly the ceiling, so the expression
     # is the whole of the difference: one block serves, two exceed. Blocks are a
     # few characters each and uncapped, which is the amplification being closed.
-    params = {"url": scaled_int_cog_path}
+    # The size is named explicitly because an unsized read is fitted to the
+    # ceiling instead of rejected.
+    params: dict[str, str | int] = {
+        "url": scaled_int_cog_path,
+        "width": 4,
+        "height": 4,
+    }
 
     served = small_ceiling_client.get("/bbox/-10,-5,10,5", params=params)
     assert served.status_code == 200, served.text
@@ -466,14 +472,37 @@ def test_bbox_band_selection_counts_toward_ceiling(
     small_ceiling_client: TestClient, cog_path: str
 ) -> None:
     # The other route to many bands: reading them from the source. With no
-    # selector every band is read, so this 2-band source allocates twice the 4x4
-    # grid (32 cells) and exceeds the ceiling of 16; narrowing to one band with
-    # bidx fits. A wide selection on a many-band source is bounded by the source
-    # rather than by the caller, but it is the same multiplier.
-    response = small_ceiling_client.get("/bbox/-10,-5,10,5", params={"url": cog_path})
+    # selector every band is read, so this 2-band source allocates twice the
+    # named 4x4 grid (32 cells) and exceeds the ceiling of 16; narrowing to one
+    # band with bidx fits. A wide selection on a many-band source is bounded by
+    # the source rather than by the caller, but it is the same multiplier.
+    params: dict[str, str | int] = {"url": cog_path, "width": 4, "height": 4}
+
+    response = small_ceiling_client.get("/bbox/-10,-5,10,5", params=params)
     assert response.status_code == 400, response.text
     assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
+
+    narrowed = small_ceiling_client.get(
+        "/bbox/-10,-5,10,5", params={**params, "bidx": 1}
+    )
+    assert narrowed.status_code == 200, narrowed.text
+
+
+def test_bbox_unsized_read_degrades_to_fit_rather_than_rejecting(
+    small_ceiling_client: TestClient, cog_path: str
+) -> None:
+    # A request naming no sizing is the one path a caller can take without
+    # asking for anything, and it must always serve. The factory picks the cap
+    # itself, so it picks one that fits: over a 16-cell ceiling this 2-band
+    # source is capped at 2x2 (2*2*2 = 8) rather than rejected at the 4x4 the
+    # default_max_size alone would have chosen. Naming an oversized grid
+    # explicitly is still a 400 (above).
+    response = small_ceiling_client.get("/bbox/-10,-5,10,5", params={"url": cog_path})
+    assert response.status_code == 200, response.text
+
+    axes = response.json()["domain"]["axes"]
+    assert (axes["x"]["num"], axes["y"]["num"]) == (2, 2)
 
     narrowed = small_ceiling_client.get(
         "/bbox/-10,-5,10,5", params={"url": cog_path, "bidx": 1}
@@ -1736,6 +1765,27 @@ def test_area_rejects_oversized_polygon(
         "/area", params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON}
     )
     assert response.status_code == 400, response.text
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_expression_bands_count_toward_ceiling(
+    small_ceiling_client: TestClient, scaled_int_cog_path: str
+) -> None:
+    # /area reads at native resolution, with no max_size to shrink the window, so
+    # the band multiplier is the only thing between a served read and the
+    # ceiling: this single-band 4x4 source is 16 cells and fits exactly, while
+    # the same polygon with a two-block expression allocates 32 and is rejected
+    # before feature() runs.
+    params = {"url": scaled_int_cog_path, "coords": _FULL_EXTENT_POLYGON}
+
+    served = small_ceiling_client.get("/area", params=params)
+    assert served.status_code == 200, served.text
+
+    response = small_ceiling_client.get(
+        "/area", params={**params, "expression": "b1;b1*2"}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
 
 

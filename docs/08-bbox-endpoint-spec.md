@@ -139,6 +139,11 @@ inline in one JSON array, so output size is a first-class concern.
   `400` response, naming the limit. Because every sizing path is resolved
   pre-read, no oversized array is allocated; a post-read check remains as
   defense-in-depth.
+- A request that names **no** sizing is the exception, and is never rejected for
+  size: the cap is the factory's to choose there, so it chooses one that fits,
+  and a many-band source comes back coarser rather than as a `400` error. An
+  11-band source at the default ceiling serves at 617x617 instead of 1024x1024.
+  Only a size the caller named explicitly can exceed the ceiling.
 - The band axis counts because a read allocates one array **per band**, and what
   counts is the arrays the read *makes*, not the bands it returns. A wide `bidx`
   multiplies the cost directly. An `expression` multiplies it twice over: it

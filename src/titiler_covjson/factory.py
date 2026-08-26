@@ -130,9 +130,9 @@ class CovJSONFactory(BaseFactory):
     (``width * height * bands``, where bands counts the full-size arrays the
     read makes: one per source band it reads, plus one per band an
     ``expression`` derives), bounding ``/bbox`` and ``/area``; and
-    ``max_samples``, the cap on the number of positions a
-    ``/position`` ``MULTIPOINT`` may name (each is one point read). A single
-    ``POINT`` needs none of the three.
+    ``max_samples``, the cap on the number of positions a ``/position``
+    ``MULTIPOINT`` may name (each is one point read). A single ``POINT`` needs
+    none of the three.
 
     A fourth knob, ``max_coords_length``, bounds the length in characters of
     ``coords`` on ``/position`` and ``/area``; an overly-long value is rejected
@@ -466,9 +466,11 @@ def _read_bounded_image(
     ``max_size``-bounded paths. It bounds ``width * height * bands``, not the
     grid alone, because the read allocates one array per selected band.
 
-    When no sizing is requested, ``default_max_size`` caps the longest output
-    dimension so a full-extent read stays bounded; rio-tiler reads native at
-    ``max_size=None``, so the cap is applied here rather than inherited. This
+    When no sizing is requested, the longest output dimension is capped here so
+    a full-extent read stays bounded (rio-tiler reads native at
+    ``max_size=None``, so the cap is applied rather than inherited). The cap is
+    ``default_max_size`` fitted to the ceiling for the band count in play, so an
+    unsized read of a many-band source comes back coarser instead of rejected. This
     relies on ``PartFeatureParams`` carrying only sizing fields, so an empty
     ``to_kwargs`` means "no sizing requested"; revisit if a non-sizing field is
     ever added upstream.
@@ -491,15 +493,25 @@ def _read_bounded_image(
     Returns:
         tuple[ImageData, Info]: The read image and the reader's dataset info.
     """
-    part_kwargs = to_kwargs(image_params) or {"max_size": default_max_size}
+    requested_kwargs = to_kwargs(image_params)
 
     with reader(src_path) as src_dst:
         info = src_dst.info()
         _validate_band_indexes(band_kwargs.get("indexes"), info)
+        bands = _selected_band_count(src_dst.dataset, band_kwargs)
+
+        # When the caller names no sizing the factory supplies its own cap, fitted
+        # to the ceiling for this band count so a many-band read comes back
+        # coarser rather than rejected: sizing is what the caller declined to
+        # specify, so choosing it is ours to do. A cap the caller *did* name is
+        # never lowered; an oversized one is rejected below.
+        part_kwargs = requested_kwargs or {
+            "max_size": _fitted_max_size(default_max_size, max_cells, bands)
+        }
 
         # Resolve the exact output dimensions rio-tiler will produce (from the
         # width/height/max_size sizing and the read window) and reject an
-        # oversized grid before the array is allocated. Opening the dataset only
+        # oversized grid before the arrays are allocated. Opening the dataset only
         # reads metadata, not pixels.
         grid_width, grid_height = _resolve_grid_dimensions(
             src_dst.dataset,
@@ -512,7 +524,7 @@ def _read_bounded_image(
         _enforce_cell_ceiling(
             grid_width,
             grid_height,
-            bands=_selected_band_count(src_dst.dataset, band_kwargs),
+            bands=bands,
             max_cells=max_cells,
             grid_label="Requested",
         )
@@ -527,8 +539,8 @@ def _read_bounded_image(
         )
 
     # Defense-in-depth backstop: the pre-read guard resolves the exact output
-    # dimensions, so this only bites if that resolution ever diverges from what
-    # part actually produced (a lock-in test guards against silent drift).
+    # dimensions and band count, so this only bites if either ever diverges from
+    # what part actually produced (lock-in tests guard against silent drift).
     _enforce_cell_ceiling(
         image.width,
         image.height,
@@ -1213,6 +1225,52 @@ def _enforce_cell_ceiling(
             f"{n_cells} cells exceeds limit of {max_cells}."
         )
         raise BadRequestError(msg)
+
+
+def _fitted_max_size(default_max_size: int, max_cells: int, bands: int) -> int:
+    """Cap an unsized read's longest side so its band count still fits the ceiling.
+
+    ``default_max_size`` is what the factory applies when a request names no
+    sizing. On a source with more bands than that default was budgeted for, the
+    resulting grid would exceed the cell ceiling, and rejecting it would break
+    the one path a caller can take without naming anything. Lowering the cap
+    instead keeps that path serving, just coarser, which is what a size cap is
+    for.
+
+    The result never rises above ``default_max_size``: a deployer's cap is an
+    upper bound, and fitting only ever tightens it. It also never falls below 1,
+    so a band count too large to serve even one cell resolves to a 1x1 grid that
+    the ceiling then rejects, rather than to a zero-sized read.
+
+    Args:
+        default_max_size: The longest output dimension applied when no sizing is
+            requested.
+        max_cells: The hard ceiling on the total cells a read allocates.
+        bands: The number of full-size arrays the read allocates.
+
+    Returns:
+        int: The longest output dimension to apply.
+
+    Examples:
+        A band count within the ceiling's budget leaves the default alone:
+
+        >>> _fitted_max_size(1024, 1024**2 * 4, bands=4)
+        1024
+
+        Beyond it the cap drops so the read still fits:
+
+        >>> _fitted_max_size(1024, 1024**2 * 4, bands=11)
+        617
+        >>> 617 * 617 * 11 <= 1024**2 * 4
+        True
+
+        A band count too large to serve even one cell floors at 1, leaving the
+        ceiling to reject it:
+
+        >>> _fitted_max_size(1024, 4, bands=99)
+        1
+    """
+    return max(1, min(default_max_size, math.isqrt(max_cells // bands)))
 
 
 def _selected_band_count(dataset: DatasetReader, band_kwargs: dict[str, Any]) -> int:
