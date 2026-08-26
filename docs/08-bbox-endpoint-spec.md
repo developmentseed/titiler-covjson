@@ -131,13 +131,26 @@ inline in one JSON array, so output size is a first-class concern.
   window's aspect ratio, and the resulting grid is resolved and checked against
   the ceiling before the read (see below), so it cannot upsample into an
   unbounded allocation.
-- A factory-configurable **hard ceiling** bounds the resulting grid cell count
-  (`width * height`). Before reading, the exact output dimensions rio-tiler will
-  produce are resolved from the sizing parameters and the read window (whether
-  from explicit `width`/`height`, a derived lone dimension, or a `max_size`
-  cap), and a grid that would exceed the ceiling is rejected with `400` naming
-  the limit. Because every sizing path is resolved pre-read, no oversized array
-  is allocated; a post-read check remains as defense-in-depth.
+- A factory-configurable **hard ceiling** bounds the cells a read allocates
+  (`width * height * bands`). Before reading, the exact output dimensions
+  rio-tiler will produce are resolved from the sizing parameters and the read
+  window (whether from explicit `width`/`height`, a derived lone dimension, or a
+  `max_size` cap), and a read that would exceed the ceiling is rejected with a
+  `400` response, naming the limit. Because every sizing path is resolved
+  pre-read, no oversized array is allocated; a post-read check remains as
+  defense-in-depth.
+- The band axis counts because a read allocates one array **per band**, and what
+  counts is the arrays the read *makes*, not the bands it returns. A wide `bidx`
+  multiplies the cost directly. An `expression` multiplies it twice over: it
+  reads every source band any block references, then derives one array per
+  block, so `b1+b2+b3` reads three arrays to return one, and `b1;b2` over two
+  source bands makes four. A no-selector read excludes an alpha band, which
+  rio-tiler drops. The default ceiling carries enough headroom for an ordinary
+  multi-band source; a deployer serving many bands at full extent may want to
+  raise the ceiling.
+- The ceiling counts cells, not bytes. What a cell costs still depends on the
+  band dtype and on `unscale` (which promotes an integer band to floating
+  point), roughly 2 to 8 bytes.
 
 Reduced-resolution Grid output is thus first-class: a caller downsamples simply
 by constraining `max_size` (or `width`/`height`).
@@ -254,7 +267,7 @@ The body is a CovJSON Grid `Coverage`, built by the existing model layer
 
 | Code | Condition |
 | --- | --- |
-| `400` | Unsupported `f` value; bbox exceeds the hard cell-count ceiling; more than one of `parameter-name` / `bidx` / `expression`; a band index out of range; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
+| `400` | Unsupported `f` value; the read exceeds the hard cell-count ceiling (the grid measured across every selected band); more than one of `parameter-name` / `bidx` / `expression`; a band index out of range; a blank `expression` sub-expression; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
 | `422` | Malformed path bbox (non-numeric segment), invalid or unsupported `crs`, or other FastAPI / Pydantic validation failure. |
 | `500` | Dataset open or read failure (e.g., an unreadable `url`), or an unexpected internal processing error. |
 

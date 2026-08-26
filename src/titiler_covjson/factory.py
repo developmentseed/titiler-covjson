@@ -26,7 +26,7 @@ right status codes.
 import dataclasses
 import math
 from collections.abc import Callable
-from typing import Annotated, Any, assert_never
+from typing import Annotated, Any, Literal, assert_never
 
 import rasterio
 from attrs import define
@@ -37,10 +37,10 @@ from rasterio.io import DatasetReader
 from rasterio.warp import transform_bounds
 from rio_tiler.constants import WGS84_CRS
 from rio_tiler.errors import PointOutsideBounds
-from rio_tiler.expression import get_expression_blocks
+from rio_tiler.expression import get_expression_blocks, parse_expression
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData, Info, PointData
-from rio_tiler.utils import get_vrt_transform
+from rio_tiler.utils import get_vrt_transform, non_alpha_indexes
 from titiler.core.dependencies import (
     CRSParams,
     DatasetParams,
@@ -82,10 +82,21 @@ from titiler_covjson.wkt import (
 
 DEFAULT_MAX_SIZE = 1024
 
+# The band allowance folded into the default cell ceiling. That ceiling totals
+# the cells over every array a read allocates, so a default sized for a single
+# band would coarsen an ordinary multi-band full-extent read: an unsized read is
+# fitted to the ceiling rather than rejected by it, so what this buys is
+# resolution, not servability. Four keeps the common RGB / RGBA source at full
+# resolution. It is headroom in the default, not a cap on bands: nothing rejects
+# a request for more, so long as cells x bands fits under the ceiling.
+DEFAULT_BAND_ALLOWANCE = 4
+
+DEFAULT_MAX_CELLS = DEFAULT_MAX_SIZE**2 * DEFAULT_BAND_ALLOWANCE
+
 # The default cap on the number of positions a single MULTIPOINT may name. It
 # bounds the number of point reads (one per position), a distinct resource from
-# max_cells (which bounds one array allocation) and from max_coords_length
-# (which bounds the text parsed to find them).
+# max_cells (which bounds the cells a read allocates across all its bands) and
+# from max_coords_length (which bounds the text parsed to find them).
 DEFAULT_MAX_SAMPLES = 1000
 
 # The default cap on the length of the `coords` query parameter, in characters
@@ -115,8 +126,11 @@ class CovJSONFactory(BaseFactory):
     band selection, dataset options, and output sizing. Three sizing knobs are
     configurable: ``default_max_size``, the longest output dimension applied when
     no sizing is requested on ``/bbox`` (a request still succeeds, just coarser);
-    ``max_cells``, a hard ceiling on the read cell count that bounds ``/bbox`` and
-    ``/area``; and ``max_samples``, the cap on the number of positions a
+    ``max_cells``, a hard ceiling on the total cells a read allocates
+    (``width * height * bands``, where bands counts the full-size arrays the
+    read makes: one per source band it reads, plus one per band an
+    ``expression`` derives), bounding ``/bbox`` and ``/area``; and
+    ``max_samples``, the cap on the number of positions a
     ``/position`` ``MULTIPOINT`` may name (each is one point read). A single
     ``POINT`` needs none of the three.
 
@@ -131,27 +145,56 @@ class CovJSONFactory(BaseFactory):
     dataset_dependency: type[DatasetParams] = DatasetParams
     image_dependency: type[PartFeatureParams] = PartFeatureParams
     default_max_size: int = DEFAULT_MAX_SIZE
-    max_cells: int = DEFAULT_MAX_SIZE * DEFAULT_MAX_SIZE
+    max_cells: int = DEFAULT_MAX_CELLS
     max_samples: int = DEFAULT_MAX_SAMPLES
     max_coords_length: int = DEFAULT_MAX_COORDS_LENGTH
 
     def __attrs_post_init__(self) -> None:
         """Validate the configured limits, then register routes (base init).
 
+        Two floors are enforced.
+
+        ``max_cells`` must be at least ``default_max_size ** 2``, because the
+        two settings would otherwise contradict each other. When a request names
+        no size, the factory supplies the cap on the output's longest side
+        itself, and on a large enough source a ``default_max_size`` cap yields a
+        ``default_max_size`` square: ``default_max_size ** 2`` cells. A
+        ``max_cells`` below that is a ceiling that the factory's own stated
+        default could never fit within, so ``default_max_size`` would be dead
+        configuration, silently lowered on every unsized request. Refusing to
+        build states that contradiction once, at startup, rather than leaving a
+        setting that never takes effect.
+
+        The floor is expressed for a single band because a dataset's band count
+        arrives with a request rather than with the configuration. It does not
+        need to cover more: an unsized read of a many-band source is fitted to
+        the ceiling rather than rejected by it, so that path serves at any band
+        count, just more coarsely. Sizing ``max_cells`` is therefore a choice
+        about resolution, not about what is servable: multiply
+        ``default_max_size ** 2`` by the widest read to keep at full resolution
+        (the band count of the data served, or the widest ``bidx`` or
+        ``expression`` to permit). The default is exactly this, with an
+        allowance of four bands.
+
+        ``max_coords_length`` must be at least 1. Zero would build a factory
+        that rejects every non-empty ``coords``, and a negative value fails deep
+        in the validation library with a message naming neither the field nor
+        the factory.
+
         Raises:
-            ValueError: If ``max_cells < default_max_size ** 2``. A full-extent
-                read at the downsampling default could otherwise exceed the
-                ceiling and be wrongly rejected.
-            ValueError: If ``max_coords_length < 1``. Zero would build a
-                factory that rejects every non-empty ``coords``, and a negative
-                value fails deep in the validation library with a message naming
-                neither the field nor the factory.
+            ValueError: If ``max_cells < default_max_size ** 2``, or if
+                ``max_coords_length < 1``.
         """
         if self.max_cells < self.default_max_size**2:
             msg = (
-                f"max_cells ({self.max_cells}) must be >= default_max_size ** 2 "
-                f"({self.default_max_size**2}); otherwise a full-extent read at "
-                "the downsampling default could exceed the cell-count ceiling."
+                f"max_cells ({self.max_cells}) is below default_max_size ** 2 "
+                f"({self.default_max_size**2}). A request naming no size is "
+                "served at up to default_max_size on its longest side, so this "
+                "ceiling would reject the factory's own default sizing. Raise "
+                f"max_cells to at least {self.default_max_size**2}, or lower "
+                "default_max_size. That minimum serves a single band at full "
+                "resolution; an N-band read needs max_cells >= N x "
+                "default_max_size ** 2 to avoid being coarsened to fit."
             )
             raise ValueError(msg)
 
@@ -420,7 +463,8 @@ def _read_bounded_image(
     band index or an oversized output grid is rejected with ``BadRequestError``
     via the guards this calls: the cell-count ceiling is checked before the read
     when the output dimensions are known and again after as a backstop for the
-    ``max_size``-bounded paths.
+    ``max_size``-bounded paths. It bounds ``width * height * bands``, not the
+    grid alone, because the read allocates one array per selected band.
 
     When no sizing is requested, ``default_max_size`` caps the longest output
     dimension so a full-extent read stays bounded; rio-tiler reads native at
@@ -441,7 +485,8 @@ def _read_bounded_image(
             unscale, resampling, reprojection).
         default_max_size: The longest output dimension applied when no sizing is
             requested.
-        max_cells: The hard cell-count ceiling.
+        max_cells: The hard ceiling on the total cells a read allocates
+            (``width * height * bands``, counting the arrays the read makes).
 
     Returns:
         tuple[ImageData, Info]: The read image and the reader's dataset info.
@@ -465,7 +510,11 @@ def _read_bounded_image(
             max_size=part_kwargs.get("max_size"),
         )
         _enforce_cell_ceiling(
-            grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
+            grid_width,
+            grid_height,
+            bands=_selected_band_count(src_dst.dataset, band_kwargs),
+            max_cells=max_cells,
+            grid_label="Requested",
         )
 
         image = src_dst.part(
@@ -481,7 +530,11 @@ def _read_bounded_image(
     # dimensions, so this only bites if that resolution ever diverges from what
     # part actually produced (a lock-in test guards against silent drift).
     _enforce_cell_ceiling(
-        image.width, image.height, max_cells=max_cells, grid_label="Output"
+        image.width,
+        image.height,
+        bands=image.count,
+        max_cells=max_cells,
+        grid_label="Output",
     )
 
     return image, info
@@ -638,9 +691,11 @@ def _read_polygon_image(
     nodata pixels) are masked. Returns the clipped image alongside the reader's
     dataset ``info``. A polygon outside the dataset does not raise: rio-tiler's
     ``feature`` returns an all-masked array, which the caller reduces to ``null``.
-    An out-of-range band index, or a bounding box over the cell-count ceiling, is
-    rejected with ``BadRequestError`` by the guards this calls (rendered as a 400
-    by the host application's titiler exception handlers).
+    An out-of-range band index, or a read over the cell-count ceiling, is
+    rejected with ``BadRequestError`` by the guards this calls (rendered as a
+    400 by the host application's titiler exception handlers). The ceiling
+    bounds ``width * height * bands`` over the polygon's bounding box, not the
+    box alone, because ``feature`` allocates one array per selected band.
 
     The read is bounded before allocation, since it is native-resolution (no
     ``max_size``, so a downstream zonal statistic stays exact) and an enormous
@@ -663,7 +718,8 @@ def _read_polygon_image(
             expression).
         dataset_kwargs: Dataset-read keyword arguments for ``feature`` (nodata,
             unscale, resampling, reprojection).
-        max_cells: The hard cell-count ceiling.
+        max_cells: The hard ceiling on the total cells a read allocates
+            (``width * height * bands``, counting the arrays the read makes).
 
     Returns:
         tuple[ImageData, Info]: The clipped image and the reader's dataset info.
@@ -691,7 +747,11 @@ def _read_polygon_image(
             max_size=None,
         )
         _enforce_cell_ceiling(
-            grid_width, grid_height, max_cells=max_cells, grid_label="Requested"
+            grid_width,
+            grid_height,
+            bands=_selected_band_count(src_dst.dataset, band_kwargs),
+            max_cells=max_cells,
+            grid_label="Requested",
         )
 
         # feature() rasterizes the cutline with all_touched=True, hardcoded rather
@@ -711,7 +771,11 @@ def _read_polygon_image(
         )
 
     _enforce_cell_ceiling(
-        image.width, image.height, max_cells=max_cells, grid_label="Output"
+        image.width,
+        image.height,
+        bands=image.count,
+        max_cells=max_cells,
+        grid_label="Output",
     )
 
     return image, info
@@ -1093,9 +1157,21 @@ def _resolve_crs(requested: rasterio.CRS | None) -> tuple[rasterio.CRS, rasterio
 
 
 def _enforce_cell_ceiling(
-    width: int, height: int, *, max_cells: int, grid_label: str
+    width: int,
+    height: int,
+    *,
+    bands: int,
+    max_cells: int,
+    grid_label: Literal["Requested", "Output"],
 ) -> None:
     """Reject a grid whose cell count exceeds the ceiling.
+
+    A read allocates one full-size array per band, so the band axis is counted:
+    the ceiling bounds ``width * height * bands``, which is what the read costs,
+    rather than the footprint of a single band's array. Callers pass the array
+    count from :func:`_selected_band_count`, which is not always the number of
+    bands returned: an ``expression`` reads every source band it references and
+    then derives its output bands from them.
 
     The pre-read and post-read checks are identical apart from the word that
     labels the grid, so ``grid_label`` supplies it ("Requested" before reading,
@@ -1104,26 +1180,88 @@ def _enforce_cell_ceiling(
     Args:
         width: The grid width in cells.
         height: The grid height in cells.
+        bands: The number of bands the read produces, each its own array.
         max_cells: The maximum allowed cell count.
         grid_label: The word labeling the grid in the error message.
 
     Raises:
-        BadRequestError: If ``width * height`` exceeds ``max_cells``.
+        BadRequestError: If ``width * height * bands`` exceeds ``max_cells``.
 
     Examples:
-        >>> _enforce_cell_ceiling(2, 2, max_cells=4, grid_label="Output")
-        >>> _enforce_cell_ceiling(3, 3, max_cells=4, grid_label="Requested")
+        The same grid fits at one band and does not at two, because each band is
+        another array of that size:
+
+        >>> _enforce_cell_ceiling(2, 2, bands=1, max_cells=4, grid_label="Output")
+        >>> _enforce_cell_ceiling(2, 2, bands=2, max_cells=4, grid_label="Requested")
         Traceback (most recent call last):
             ...
-        titiler.core.errors.BadRequestError: Requested grid 3x3 (w x h) = 9
-        cells exceeds limit of 4.
+        titiler.core.errors.BadRequestError: Requested grid 2x2x2 (w x h x bands)
+        = 8 cells exceeds limit of 4.
+
+        The label is the only difference between the pre-read check and the
+        post-read backstop, which reports the grid the read returned:
+
+        >>> _enforce_cell_ceiling(3, 3, bands=1, max_cells=4, grid_label="Output")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Output grid 3x3x1 (w x h x bands) =
+        9 cells exceeds limit of 4.
     """
-    if (n_cells := width * height) > max_cells:
+    if (n_cells := width * height * bands) > max_cells:
         msg = (
-            f"{grid_label} grid {width}x{height} (w x h) = {n_cells} cells "
-            f"exceeds limit of {max_cells}."
+            f"{grid_label} grid {width}x{height}x{bands} (w x h x bands) = "
+            f"{n_cells} cells exceeds limit of {max_cells}."
         )
         raise BadRequestError(msg)
+
+
+def _selected_band_count(dataset: DatasetReader, band_kwargs: dict[str, Any]) -> int:
+    """Count the full-size arrays a read of this band selection allocates.
+
+    This is the band axis of the cell ceiling, and it counts *arrays*, not
+    output bands: the two differ for an expression. A read evaluates an
+    expression by first reading every source band it references, then building
+    one array per ``;``-separated block from them, and both sets are live while
+    the blocks are evaluated. So ``b1+b2+b3`` reads three arrays to return one,
+    and counting its single output band would understate the read threefold.
+
+    With no selector the count excludes an alpha band, which a read drops.
+
+    Args:
+        dataset: The open rasterio dataset, for its band count and color
+            interpretation.
+        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
+            ``expression``).
+
+    Returns:
+        int: The number of full-size arrays the read allocates.
+
+    Examples:
+        An expression allocates one array per source band it references, plus
+        one per block it produces:
+
+        >>> from unittest.mock import Mock
+        >>> _selected_band_count(Mock(), {"expression": "b1+b2+b3"})
+        4
+        >>> _selected_band_count(Mock(), {"expression": "b1;b1*2"})
+        3
+
+        An index selection allocates exactly what it names:
+
+        >>> _selected_band_count(Mock(), {"indexes": (2, 1)})
+        2
+    """
+    if (expression := band_kwargs.get("expression")) is not None:
+        # Validate first: parse_expression raises its own error on a degenerate
+        # expression, and ours names the fault.
+        blocks = _expression_band_names(expression)
+
+        return len(parse_expression(expression)) + len(blocks)
+
+    if (indexes := band_kwargs.get("indexes")) is not None:
+        return len(indexes)
+
+    return len(non_alpha_indexes(dataset))
 
 
 def _validate_band_indexes(indexes: tuple[int, ...] | None, info: Info) -> None:
@@ -1332,13 +1470,18 @@ def _resolve_unread_bands(
 ) -> tuple[BandInfo, ...]:
     """Resolve per-band metadata from dataset ``info`` alone, without a read.
 
-    Used when a multipoint sampled every position outside the dataset: there is
-    no read to resolve bands from, so the names and dtype come from ``info``. The
-    result matches what :func:`_resolve_read_bands` would produce from a
-    successful read of the same selection, except that the dtype is the source
-    ``info.dtype`` rather than a read's (a read can differ, e.g. unscale casting an
-    integer band to float, but an all-outside multipoint has no values for that to
-    matter to: every entry is ``null``).
+    Answers "which bands would this selection produce?" without reading: for a
+    multipoint that sampled every position outside the dataset there is no read
+    to resolve bands from. This is the bands *returned*, not the arrays a read
+    allocates, which is the different question :func:`_selected_band_count`
+    answers for the cell ceiling: an expression returns one band per block while
+    reading one array per source band its blocks reference. The result matches
+    what
+    :func:`_resolve_read_bands` would produce from a successful read of the same
+    selection, except that the dtype is the source ``info.dtype`` rather than a
+    read's (a read can differ, e.g., unscale casting an integer band to float,
+    but an all-outside multipoint has no values for that to matter to: every
+    entry is ``null``).
 
     ``indexes`` select positionally (1-based) from the dataset's bands rather than
     by reconstructing rio-tiler's ``b{ix}`` names, so this holds no second copy of

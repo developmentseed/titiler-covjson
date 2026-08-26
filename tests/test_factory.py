@@ -6,6 +6,7 @@ import rasterio
 from conftest import validate_covjson
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from rio_tiler.expression import parse_expression
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData, Info, PointData
 from titiler.core.errors import (
@@ -21,6 +22,7 @@ from titiler_covjson.factory import (
     _resolve_grid_dimensions,
     _resolve_read_bands,
     _resolve_unread_bands,
+    _selected_band_count,
 )
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
 
@@ -325,10 +327,12 @@ def test_bbox_rejects_oversized_explicit_grid(
     client: TestClient, cog_path: str
 ) -> None:
     # Both width and height explicit: the cell count is known pre-read and
-    # rejected before any array is allocated ("Requested", not "Output").
+    # rejected before any array is allocated ("Requested", not "Output"). Sized
+    # to exceed the ceiling on the grid alone, so this stays a test of the grid
+    # measure; the band multiplier has its own tests below.
     response = client.get(
         "/bbox/-10,-5,10,5",
-        params={"url": cog_path, "width": 2000, "height": 2000},
+        params={"url": cog_path, "width": 3000, "height": 3000},
     )
     assert response.status_code == 400, response.text
     assert "Requested" in response.json()["detail"]
@@ -420,19 +424,117 @@ def test_bbox_lone_height_derived_grid_hits_ceiling(
 
 
 def test_bbox_huge_max_size_hits_ceiling_pre_read(
-    client: TestClient, wide_cog_path: str
+    single_band_ceiling_client: TestClient, wide_cog_path: str
 ) -> None:
     # max_size caps the longest output axis at min(max_size, native). On a source
     # whose native resolution exceeds the default cap, a max_size at/above
-    # default_max_size resolves to a grid over the default max_cells, and it is
-    # resolved pre-read, so it is rejected before allocation ("Requested"), not by
-    # the post-read backstop after a large read (the max_size DoS this closes).
-    response = client.get(
+    # default_max_size resolves to a grid over the ceiling, and it is resolved
+    # pre-read, so it is rejected before allocation ("Requested"), not by the
+    # post-read backstop after a large read (the max_size DoS this closes). Read
+    # against the single-band ceiling so the grid alone carries the rejection:
+    # under the default's band allowance this 1100x1100 x 2-band read fits.
+    response = single_band_ceiling_client.get(
         "/bbox/-10,-5,10,5", params={"url": wide_cog_path, "max_size": 1500}
     )
     assert response.status_code == 400, response.text
     assert "Requested" in response.json()["detail"]
     assert "exceeds limit" in response.json()["detail"]
+
+
+def test_bbox_expression_bands_count_toward_ceiling(
+    small_ceiling_client: TestClient, scaled_int_cog_path: str
+) -> None:
+    # An expression evaluates each ;-separated block into its own full-size
+    # array, so N blocks allocate N times the grid. Over this single-band 4x4
+    # source the grid alone is 16 cells, exactly the ceiling, so the expression
+    # is the whole of the difference: one block serves, two exceed. Blocks are a
+    # few characters each and uncapped, which is the amplification being closed.
+    params = {"url": scaled_int_cog_path}
+
+    served = small_ceiling_client.get("/bbox/-10,-5,10,5", params=params)
+    assert served.status_code == 200, served.text
+
+    response = small_ceiling_client.get(
+        "/bbox/-10,-5,10,5", params={**params, "expression": "b1;b1*2"}
+    )
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_bbox_band_selection_counts_toward_ceiling(
+    small_ceiling_client: TestClient, cog_path: str
+) -> None:
+    # The other route to many bands: reading them from the source. With no
+    # selector every band is read, so this 2-band source allocates twice the 4x4
+    # grid (32 cells) and exceeds the ceiling of 16; narrowing to one band with
+    # bidx fits. A wide selection on a many-band source is bounded by the source
+    # rather than by the caller, but it is the same multiplier.
+    response = small_ceiling_client.get("/bbox/-10,-5,10,5", params={"url": cog_path})
+    assert response.status_code == 400, response.text
+    assert "Requested" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+    narrowed = small_ceiling_client.get(
+        "/bbox/-10,-5,10,5", params={"url": cog_path, "bidx": 1}
+    )
+    assert narrowed.status_code == 200, narrowed.text
+
+
+def test_bbox_expression_counts_source_bands_not_returned_bands(
+    small_ceiling_client: TestClient, cog_path: str
+) -> None:
+    # The fan-in case: b1+b2 returns ONE band but reads two source arrays, so a
+    # ceiling counting returned bands would measure a third of what it costs and
+    # wave it through. Over the 16-cell ceiling, a 4x4 grid (16 cells) times the
+    # three arrays this makes (two read, one derived) is 48, so it is rejected,
+    # and the message names the count.
+    response = small_ceiling_client.get(
+        "/bbox/-10,-5,10,5",
+        params={"url": cog_path, "max_size": 4, "expression": "b1+b2"},
+    )
+    assert response.status_code == 400, response.text
+    assert "4x4x3" in response.json()["detail"]
+    assert "exceeds limit" in response.json()["detail"]
+
+
+def test_bbox_empty_expression_rejected_not_counted_as_zero_bands(
+    client: TestClient, cog_path: str
+) -> None:
+    # An expression of only separators yields no blocks. Left to the ceiling it
+    # would make the cells x bands product zero and pass however large the grid,
+    # so it is rejected as an empty selection rather than counted. Asserting our
+    # message, not rio-tiler's, is the point: the bound must not depend on an
+    # upstream library happening to raise first.
+    response = client.get(
+        "/bbox/-10,-5,10,5",
+        params={"url": cog_path, "width": 3000, "height": 3000, "expression": ";"},
+    )
+    assert response.status_code == 400, response.text
+    assert "Empty expression" in response.json()["detail"]
+    assert "exceeds limit" not in response.json()["detail"]
+
+
+def test_bbox_blank_expression_block_names_its_position(
+    client: TestClient, cog_path: str
+) -> None:
+    # rio-tiler's splitter drops an empty block but keeps a whitespace-only one,
+    # which strips to a nameless band. Two of them would otherwise collide as ''
+    # and be misreported as duplicate names, so the blank is named as its own
+    # fault, with the position it was written in.
+    response = client.get(
+        "/bbox/-10,-5,10,5", params={"url": cog_path, "expression": "b1; ;b2"}
+    )
+    assert response.status_code == 400, response.text
+    assert "Blank sub-expression" in response.json()["detail"]
+    assert "position 1" in response.json()["detail"]
+
+    both = client.get(
+        "/bbox/-10,-5,10,5", params={"url": cog_path, "expression": " ; "}
+    )
+    assert both.status_code == 400, both.text
+    assert "blanks at positions 0, 1" in both.json()["detail"]
+    assert "Duplicate" not in both.json()["detail"]
 
 
 def test_bbox_rejects_subpixel_thin_bbox(
@@ -565,6 +667,71 @@ def test_resolve_grid_dimensions_matches_rio_tiler(
     assert predicted == (image.width, image.height)
 
 
+@pytest.mark.parametrize(
+    "band_kwargs",
+    [
+        {},
+        {"indexes": (1,)},
+        {"indexes": (2, 1)},
+        {"expression": "b1;b2/b1;b1*2"},
+        {"expression": "b1+b2"},
+    ],
+    ids=["all-bands", "one-index", "reordered-indexes", "expression", "fan-in"],
+)
+def test_selected_band_count_never_undercounts_the_read(
+    cog_path: str, band_kwargs: dict[str, object]
+) -> None:
+    # Lock-in, the band-axis counterpart of the dimension parity above: the
+    # ceiling multiplies by this count before the read, so it must never be
+    # below the arrays the read allocates, or the ceiling would guard fewer than
+    # exist and silently reopen the DoS. The "fan-in" case is the one that makes
+    # this bite: b1+b2 returns a single band but reads two source arrays, so a
+    # count of the returned bands would understate it.
+    with Reader(cog_path) as src:
+        predicted = _selected_band_count(src.dataset, band_kwargs)
+        image = src.part(
+            _FULL_BOUNDS,
+            dst_crs=src.dataset.crs,
+            bounds_crs=src.dataset.crs,
+            **band_kwargs,
+        )
+        expression = band_kwargs.get("expression")
+        source_arrays = (
+            len(parse_expression(str(expression))) if expression else image.count
+        )
+
+    assert predicted >= source_arrays
+    assert predicted >= image.count
+
+
+@pytest.mark.parametrize(
+    "band_kwargs",
+    [{}, {"indexes": (2, 1)}, {"expression": "b1;b2/b1"}],
+    ids=["all-bands", "reordered-indexes", "expression"],
+)
+def test_unread_band_names_match_resolved_read_bands(
+    cog_path: str, band_kwargs: dict[str, object]
+) -> None:
+    # The naming counterpart of the count lock-in above, and a separate concern:
+    # the two resolvers are the only sources of band metadata, and a multipoint
+    # that sampled every position outside the dataset takes the unread one while
+    # every successful read takes the other. They must not drift apart. Note the
+    # names are ours, not rio-tiler's, which numbers expression outputs
+    # positionally (b1, b2, ...) and would collide with source band names.
+    with Reader(cog_path) as src:
+        info = src.info()
+        unread = _resolve_unread_bands(info, band_kwargs)
+        image = src.part(
+            _FULL_BOUNDS,
+            dst_crs=src.dataset.crs,
+            bounds_crs=src.dataset.crs,
+            **band_kwargs,
+        )
+        read = _resolve_read_bands(image, info, band_kwargs)
+
+    assert [band.name for band in unread] == [band.name for band in read]
+
+
 def test_output_grid_dimensions_does_not_reject_subpixel(cog_path: str) -> None:
     # _output_grid_dimensions only computes the dimensions rio-tiler will read;
     # unlike _resolve_grid_dimensions it does NOT reject a sub-pixel-thin box.
@@ -599,9 +766,10 @@ def test_output_grid_dimensions_does_not_reject_subpixel(cog_path: str) -> None:
 def test_bbox_rejects_oversized_output_grid(
     small_ceiling_client: TestClient, cog_path: str
 ) -> None:
-    # max_size=8 -> an 8x8 = 64-cell output exceeds the factory's max_cells=16.
-    # The max_size output dimensions are resolved pre-read, so this is rejected
-    # before allocation ("Requested"), same as explicit width/height.
+    # max_size=8 -> an 8x8 output over 2 bands = 128 cells, exceeding the
+    # factory's max_cells=16. The max_size output dimensions are resolved
+    # pre-read, so this is rejected before allocation ("Requested"), same as
+    # explicit width/height.
     response = small_ceiling_client.get(
         "/bbox/-10,-5,10,5", params={"url": cog_path, "max_size": 8}
     )
@@ -1563,7 +1731,7 @@ def test_area_rejects_oversized_polygon(
 ) -> None:
     # The read is bounded before allocation: a polygon whose bounding box exceeds
     # the cell-count ceiling (here 16) is rejected. The 16x16 source's full extent
-    # is 256 cells.
+    # is 256 cells over 2 bands, so 512.
     response = small_ceiling_client.get(
         "/area", params={"url": cog_path, "coords": _FULL_EXTENT_POLYGON}
     )
