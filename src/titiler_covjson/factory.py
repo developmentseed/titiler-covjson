@@ -1396,7 +1396,8 @@ def _expression_band_names(expression: str) -> tuple[str, ...]:
         tuple[str, ...]: The derived band names, in request order.
 
     Raises:
-        BadRequestError: If the derived names are not all unique.
+        BadRequestError: If a sub-expression is blank, if the expression names
+            no bands at all, or if the derived names are not all unique.
 
     Examples:
         >>> _expression_band_names("b1;b2/b1")
@@ -1408,6 +1409,30 @@ def _expression_band_names(expression: str) -> tuple[str, ...]:
         >>> _expression_band_names("b1;b2/b1;")
         ('b1', 'b2/b1')
 
+        A blank sub-expression is not dropped, though: it names no band, and
+        the position it was written in is reported, counting the dropped empty
+        blocks the caller wrote:
+
+        >>> _expression_band_names("b1; ;b2")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Blank sub-expression: every
+        ';'-separated block must name a band; blank at position 1.
+
+        >>> _expression_band_names(";b1; ;b2")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Blank sub-expression: every
+        ';'-separated block must name a band; blank at position 2.
+
+        An expression of separators alone names nothing at all:
+
+        >>> _expression_band_names(";")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Empty expression: ';' names no
+        bands; a ';'-separated list must have at least one block.
+
         >>> _expression_band_names("b1;b1")
         Traceback (most recent call last):
             ...
@@ -1418,6 +1443,33 @@ def _expression_band_names(expression: str) -> tuple[str, ...]:
     # exact one-to-one correspondence with the bands the read returns for the
     # same expression (it splits on ``;`` and drops empty sub-expressions).
     names = tuple(block.strip() for block in get_expression_blocks(expression))
+
+    # It drops "" but keeps a whitespace-only block, which strips to a nameless
+    # band. Reject that as its own fault: left to the duplicate check below, two
+    # of them would be misreported as colliding names. Positions come from the
+    # caller's own ``;``-split, not from the filtered blocks, whose indexes the
+    # dropped empties shift away from what was written.
+    if blanks := [
+        str(i)
+        for i, block in enumerate(expression.split(";"))
+        if block and not block.strip()
+    ]:
+        fault = "blank at position" if len(blanks) == 1 else "blanks at positions"
+        msg = (
+            "Blank sub-expression: every ';'-separated block must name a band; "
+            f"{fault} {', '.join(blanks)}."
+        )
+        raise BadRequestError(msg)
+
+    # No blocks at all (only separators). Rejected here rather than left to the
+    # read: a zero-band selection makes the cell ceiling's cells x bands product
+    # zero, which would pass any grid.
+    if not names:
+        msg = (
+            f"Empty expression: {expression!r} names no bands; a ';'-separated "
+            "list must have at least one block."
+        )
+        raise BadRequestError(msg)
 
     if len(set(names)) != len(names):
         msg = f"Duplicate expression: derived band names must be unique; got {names}."
