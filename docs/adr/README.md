@@ -60,3 +60,7 @@ Keep each ADR self-contained, and do not restate conventions already in CLAUDE.m
   Trajectory domain is temporal (`/trajectory` moves to the Temporal surface);
   MultiPoint is the non-temporal multi-position query (`/position` +
   `MULTIPOINT`)
+- [ADR-0006](0006-resource-ceilings-bound-the-resource.md) -- A ceiling counts
+  every array a read allocates (`max_cells` bounds `width * height * bands`);
+  room for ordinary multi-band reads comes from a larger default value, never
+  from narrowing what the ceiling counts

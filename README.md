@@ -19,7 +19,8 @@ dataset, each returning a CoverageJSON coverage in its own domain.
 
 - **Available:**
   - `GET {prefix}/bbox/{minx},{miny},{maxx},{maxy}`: a 2-D Grid coverage for a
-    bounding box, with output sizing and a cell-count ceiling.
+    bounding box, with output sizing and a cell-count ceiling (counting every
+    array the read allocates, not just the bands it returns).
   - `GET {prefix}/position?coords=POINT(x y)` (or
     `MULTIPOINT((x y), ...)`): a Point coverage sampling a single location, or a
     MultiPoint coverage sampling each position (a position outside the dataset

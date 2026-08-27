@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from titiler.core.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 
 from titiler_covjson.factory import (
+    DEFAULT_MAX_CELLS,
     DEFAULT_MAX_SAMPLES,
     DEFAULT_MAX_SIZE,
     CovJSONFactory,
@@ -64,8 +65,9 @@ def wide_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 
     Used to exercise the explicit-``max_size`` cell-count ceiling: a ``max_size``
     at or above ``default_max_size`` on a source this large resolves to a grid
-    exceeding the default ``max_cells``, so it must be rejected before the read.
-    Session-scoped.
+    that must be rejected before the read. Note the grid alone no longer exceeds
+    the *default* ``max_cells``, which carries a band allowance, so the test
+    pairs this with a single-band ceiling. Session-scoped.
 
     Returns:
         str: Filesystem path to the written COG.
@@ -181,6 +183,22 @@ def small_ceiling_client() -> TestClient:
 
 
 @pytest.fixture
+def single_band_ceiling_client() -> TestClient:
+    """Return a TestClient over a factory whose ceiling allows one band.
+
+    The default ceiling carries a band allowance, so a full-extent multi-band
+    read fits under it; this factory drops that allowance, leaving room for one
+    band of the largest unsized read (a ``DEFAULT_MAX_SIZE`` square), which is
+    the construction invariant's floor. Used where a test needs a grid alone to
+    reach the ceiling.
+
+    Returns:
+        TestClient: Client whose factory uses ``max_cells=DEFAULT_MAX_SIZE ** 2``.
+    """
+    return _make_client(max_cells=DEFAULT_MAX_SIZE**2)
+
+
+@pytest.fixture
 def small_samples_client() -> TestClient:
     """Return a TestClient over a factory with a tiny MULTIPOINT position cap.
 
@@ -257,7 +275,7 @@ def roundtrip_is_stable(cls: type[BaseModel], data: dict[str, Any]) -> bool:
 def _make_client(
     *,
     default_max_size: int = DEFAULT_MAX_SIZE,
-    max_cells: int = DEFAULT_MAX_SIZE**2,
+    max_cells: int = DEFAULT_MAX_CELLS,
     max_samples: int = DEFAULT_MAX_SAMPLES,
 ) -> TestClient:
     """Build a TestClient over an app mounting a CovJSONFactory.
