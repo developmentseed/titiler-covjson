@@ -149,10 +149,20 @@ inline in one JSON array, so output size is a first-class concern.
   multiplies the cost directly. An `expression` multiplies it twice over: it
   reads every source band any block references, then derives one array per
   block, so `b1+b2+b3` reads three arrays to return one, and `b1;b2` over two
-  source bands makes four. A no-selector read excludes an alpha band, which
-  rio-tiler drops. The default ceiling carries enough headroom for an ordinary
-  multi-band source; a deployer serving many bands at full extent may want to
-  raise the ceiling.
+  source bands makes four. An alpha band counts on top of whatever the request
+  selected, including a request that selects nothing, because rio-tiler drops it
+  from the output but still reads it as the mask. Two conditions decide whether
+  that read happens, and neither follows from the selection: a `nodata` value
+  (the request's, the reader's, or the dataset's own) overrides the mask read so
+  no alpha array is allocated, and a read routed through a `WarpedVRT` is handed
+  an alpha band even when the source has none. A read is routed through one when
+  it reprojects, when the deployment configures its reader with VRT options such
+  as a cutline, or when the source is georeferenced by ground control points,
+  which rio-tiler's reader wraps in a `WarpedVRT` when it opens the dataset. A
+  deployer budgeting for a configured reader should therefore count that extra
+  array on every read that has no `nodata` value. The default ceiling carries
+  enough headroom for an ordinary multi-band source, and a deployer serving many
+  bands at full extent may want to raise the ceiling.
 - The ceiling counts cells, not bytes. What a cell costs still depends on the
   band dtype and on `unscale` (which promotes an integer band to floating
   point), roughly 2 to 8 bytes.
@@ -185,6 +195,16 @@ Because `parameter-name` and `bidx` are two spellings of one operation (and
 both feed rio-tiler's single `indexes` argument), and `expression` is its own
 lane, the three are **mutually exclusive**: supplying more than one is a `400`
 (see Section 10) with a message directing the caller to supply only one.
+
+An alpha band is addressable by every selector, and is dropped from the *output*
+only when the request selects no bands at all. A no-selector read returns the
+non-alpha bands, while `bidx=4`, `parameter-name=b4`, and `expression=b4` each
+serve band 4 of an RGBA source. Dropped from the output is not the same as
+unread: the alpha band is read as the mask whatever the selector, unless a
+`nodata` value overrides that read, so it counts against the cell ceiling
+whenever it is read (see Section 5). Band references are therefore
+range-checked against the dataset's full band count, alpha included, so a
+request for an alpha band is a `200` and one past it a `400` (see Section 10).
 
 Band metadata (descriptions, units) is carried from the reader's `info()` and
 **aligned to the selected bands**: it must be subset to match the bands the

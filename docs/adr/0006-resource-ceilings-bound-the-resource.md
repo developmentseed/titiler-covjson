@@ -133,8 +133,9 @@ four-fold for the single-band deployments that never needed it.
   three. An earlier revision of this change counted the returned bands and
   undercounted such a read by the source's band count: `expression=b1+...+b40`
   on a 40-band source measured as one array and read forty. The ceiling takes
-  its own count, and a lock-in test asserts it never falls below either the
-  source arrays read or the bands returned.
+  its own count, and endpoint tests check that count against real reads. Each
+  test pairs a request that fits under the ceiling with one that exceeds it
+  only because the read allocates arrays it does not return.
 - One band-multiplied path is deliberately left uncovered: a `/position`
   `MULTIPOINT`, which `max_cells` does not govern at all (`max_samples` does,
   capping how many positions one request may name). Bands multiply there too:
