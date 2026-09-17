@@ -272,13 +272,12 @@ The body is a CovJSON Grid `Coverage`, built by the existing model layer
 
 | Code | Condition |
 | --- | --- |
-| `400` | Unsupported `f` value; the read exceeds the hard cell-count ceiling (the grid measured across every selected band); more than one of `parameter-name` / `bidx` / `expression`; a band index out of range; a blank `expression` sub-expression; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
+| `400` | Unsupported `f` value; the read exceeds the hard cell-count ceiling (the grid measured across every selected band); more than one of `parameter-name` / `bidx` / `expression`; a band index out of range, whether supplied by `bidx` / `parameter-name` or referenced inside an `expression`; an `expression` band reference whose digits are not a band number (e.g., `b1+b2b`); a blank `expression` sub-expression; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
 | `422` | Malformed path bbox (non-numeric segment), invalid or unsupported `crs`, or other FastAPI / Pydantic validation failure. |
 | `500` | Dataset open or read failure (e.g., an unreadable `url`), or an unexpected internal processing error. |
 
-This single-dataset slice produces no `404`: a band the dataset lacks is either
-rejected as a `400` (out-of-range `bidx` / `parameter-name`) or surfaces as a
-`500` (a bad band reference inside an `expression`), and a missing `url` is a
+This single-dataset slice produces no `404`: a band the dataset lacks is
+rejected as a `400` whichever selector referenced it, and a missing `url` is a
 dataset read failure (`500`), not a not-found resource. The `crs` value is
 validated by a Pydantic `BeforeValidator`, so an invalid one is a `422`, not a
 `400`.
