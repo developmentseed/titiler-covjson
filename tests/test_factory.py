@@ -23,6 +23,7 @@ from titiler_covjson.factory import (
     _resolve_read_bands,
     _resolve_unread_bands,
     _selected_band_count,
+    _validate_band_selection,
 )
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
 
@@ -1857,6 +1858,130 @@ def test_area_rejects_unsupported_format(client: TestClient, cog_path: str) -> N
 def test_area_requires_coords(client: TestClient, cog_path: str) -> None:
     response = client.get("/area", params={"url": cog_path})
     assert response.status_code == 422, response.text
+
+
+# One entry per read path, as the (path, extra query params) pair a request
+# needs. The params differ because /bbox carries its extent in the path while
+# the others carry a geometry in `coords`, so no single `coords` parametrization
+# serves them all. /position appears twice, for a POINT and a MULTIPOINT,
+# because those reach different read helpers, which is why there are more
+# entries here than routes.
+_BAND_SELECTING_READ_PATHS = [
+    pytest.param("/bbox/-10,-5,10,5", {}, id="bbox"),
+    pytest.param("/position", {"coords": "POINT(0 0)"}, id="position-point"),
+    pytest.param(
+        "/position",
+        {"coords": "MULTIPOINT((0 0), (1 1))"},
+        id="position-multipoint",
+    ),
+    pytest.param("/area", {"coords": _FULL_EXTENT_POLYGON}, id="area"),
+]
+
+
+@pytest.mark.parametrize(("path", "extra"), _BAND_SELECTING_READ_PATHS)
+@pytest.mark.parametrize(
+    ("expression", "detail"),
+    [
+        ("b9", "dataset has 2 band(s); expression 'b9' references band(s) (9,)"),
+        ("b0", "dataset has 2 band(s); expression 'b0' references band(s) (0,)"),
+        ("b1+b2b", "every 'b' reference must be a band number"),
+    ],
+    ids=["above-range", "below-range", "non-numeric"],
+)
+def test_rejects_unservable_expression_band(
+    client: TestClient,
+    cog_path: str,
+    path: str,
+    extra: dict[str, str],
+    expression: str,
+    detail: str,
+) -> None:
+    # A band an expression references, but the dataset lacks, reaches rio-tiler
+    # as a
+    # bare IndexError; and a reference whose digits are not a number, reaches
+    # rio-tiler as a bare ValueError from its reference parser. Neither carries
+    # a status mapping, so without _validate_band_selection both render as a 500
+    # blaming the server for the caller's typo. Parametrized over
+    # _BAND_SELECTING_READ_PATHS because every one of them calls that guard, and
+    # a single POINT reads one pixel and so resolves no band count of its own,
+    # leaving it outside the ceiling-driven checks the others have.
+    #
+    # The message is asserted, not just the status: rio-tiler answers 400 for
+    # neighboring malformed expressions, so a status-only check would pass with
+    # the guard removed.
+    response = client.get(
+        path, params={"url": cog_path, "expression": expression, **extra}
+    )
+
+    assert response.status_code == 400, response.text
+    assert detail in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["b1+b2", "b1+b1", "b1;b2"],
+    ids=["fan-in", "repeated-reference", "two-blocks"],
+)
+def test_serves_expression_referencing_only_present_bands(
+    client: TestClient, cog_path: str, expression: str
+) -> None:
+    # _validate_band_selection must not over-reject. "b1+b1" is the case to
+    # watch: it references one band twice, which is legitimate band math, and
+    # must
+    # not be caught by the duplicate rule that applies to bidx. rio-tiler's
+    # reference parser returns a set, so the repeat never reaches the range
+    # check as a duplicate at all.
+    #
+    # One read path, unlike test_rejects_unservable_expression_band, which is
+    # parametrized over _BAND_SELECTING_READ_PATHS to establish that each one
+    # calls the guard. Whether it over-rejects is a property of the guard, not
+    # of the caller, so repeating this per read path only re-reports the same
+    # answer.
+    response = client.get(
+        "/bbox/-10,-5,10,5", params={"url": cog_path, "expression": expression}
+    )
+
+    assert response.status_code == 200, response.text
+
+
+def test_band_selection_carrying_both_selectors_still_checks_the_indexes() -> None:
+    # Not reachable through a route: CovJSONBandParams rejects a request
+    # supplying two selectors before any of this runs. Asserted directly on
+    # _validate_band_selection because that exclusivity is an invariant of the
+    # dependency, not of its plain-dict signature. Pins the index check as
+    # unconditional: reaching it through an `else` on the expression branch
+    # would skip it for a dict carrying both keys, and this goes red rather than
+    # silent whenever a second producer of band_kwargs appears.
+    info = Info(
+        bounds=(0.0, 0.0, 1.0, 1.0),
+        crs="http://www.opengis.net/def/crs/EPSG/0/4326",
+        band_metadata=[("b1", {}), ("b2", {})],
+        band_descriptions=[("b1", "red"), ("b2", "nir")],
+        dtype="int16",
+        nodata_type="None",
+    )
+
+    with pytest.raises(BadRequestError, match="out of range"):
+        _validate_band_selection({"expression": "b1", "indexes": (9,)}, info)
+
+
+@pytest.mark.parametrize(("path", "extra"), _BAND_SELECTING_READ_PATHS)
+def test_names_blank_expression_block_on_every_route(
+    client: TestClient, cog_path: str, path: str, extra: dict[str, str]
+) -> None:
+    # Every read path runs the same pre-read guard, _validate_band_selection, so
+    # they all report the same fault for the same malformed expression.
+    # Uniformity is the property at risk: a single POINT resolves no band count
+    # of its own, so without that guard nothing inspects the expression before
+    # the read, and rio-tiler's "unexpected indent" wins over our message.
+    # test_bbox_blank_expression_block_names_its_position covers the reported
+    # position separately.
+    response = client.get(
+        path, params={"url": cog_path, "expression": "b1; ;b2", **extra}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "Blank sub-expression" in response.json()["detail"]
 
 
 def _published_coords_bounds(client: TestClient) -> dict[str, int | None]:

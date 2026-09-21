@@ -459,12 +459,13 @@ def _read_bounded_image(
     """Read ``bounds`` from ``src_path`` as an image, enforcing the cell ceiling.
 
     Opens ``src_path``, reads the region (reprojecting to ``read_crs``), and
-    returns the image alongside the reader's dataset ``info``. An out-of-range
-    band index or an oversized output grid is rejected with ``BadRequestError``
-    via the guards this calls: the cell-count ceiling is checked before the read
-    when the output dimensions are known and again after as a backstop for the
-    ``max_size``-bounded paths. It bounds ``width * height * bands``, not the
-    grid alone, because the read allocates one array per selected band.
+    returns the image alongside the reader's dataset ``info``. An invalid band
+    selection (a malformed expression, or a band the dataset does not have), or an
+    oversized output grid, is rejected with ``BadRequestError`` via the guards
+    this calls: the cell-count ceiling is checked before the read when the output
+    dimensions are known and again after as a backstop for the ``max_size``-bounded
+    paths. It bounds ``width * height * bands``, not the grid alone, because the read
+    allocates one array per selected band.
 
     When no sizing is requested, the longest output dimension is capped here so
     a full-extent read stays bounded (rio-tiler reads native at
@@ -497,7 +498,7 @@ def _read_bounded_image(
 
     with reader(src_path) as src_dst:
         info = src_dst.info()
-        _validate_band_indexes(band_kwargs.get("indexes"), info)
+        _validate_band_selection(band_kwargs, info)
         bands = _selected_band_count(src_dst.dataset, band_kwargs)
 
         # When the caller names no sizing the factory supplies its own cap, fitted
@@ -566,9 +567,10 @@ def _read_point(
     Opens ``src_path``, samples the single position (interpreting it in
     ``read_crs``), and returns the point alongside the reader's dataset ``info``.
     No sizing apparatus applies to a point sample, so unlike the bounding-box
-    read this drops ``max_size`` / cell-count handling entirely. An out-of-range
-    band index is rejected with ``BadRequestError`` by the guard this calls; a
-    position outside the dataset bounds is caught and re-raised as
+    read this drops ``max_size`` / cell-count handling entirely. An invalid band
+    selection (a malformed expression, or a band the dataset does not have) is
+    rejected with ``BadRequestError`` by the guard this calls. A position outside
+    the dataset bounds is caught and re-raised as
     ``BadRequestError`` (rio-tiler's ``PointOutsideBounds`` is not in titiler's
     default status map, so it would otherwise surface as an opaque 500).
 
@@ -586,13 +588,13 @@ def _read_point(
         tuple[PointData, Info]: The sampled point and the reader's dataset info.
 
     Raises:
-        BadRequestError: If a requested band index is out of range, or the
-            position falls outside the dataset bounds. The host application's
-            titiler exception handlers render this as a 400 response.
+        BadRequestError: If the band selection is invalid, or the position
+            falls outside the dataset bounds. The host application's titiler
+            exception handlers render this as a 400 response.
     """
     with reader(src_path) as src_dst:
         info = src_dst.info()
-        _validate_band_indexes(band_kwargs.get("indexes"), info)
+        _validate_band_selection(band_kwargs, info)
 
         try:
             point = src_dst.point(
@@ -627,9 +629,11 @@ def _read_multipoint(
     ``info``. A position outside the dataset bounds is reported as ``None`` rather
     than raised, so an out-of-bounds position becomes a ``null`` value in the
     coverage and the request still succeeds even when every position is outside.
-    An out-of-range band index, and a duplicate-derived-name expression, are both
-    rejected before any position is read, so a bad selection does not read N times
-    before failing.
+    An invalid band selection (a malformed expression, or a band the dataset
+    does not have) is rejected with ``BadRequestError`` by the guard this calls,
+    before any position is read, so a bad selection does not read N times before
+    failing. The host application's titiler exception handlers render that as a
+    400 response.
 
     Only ``PointOutsideBounds`` is turned into ``None``: a genuine reader error
     (e.g. a read that a ``WarpedVRT`` refuses) still propagates, since silencing
@@ -645,25 +649,13 @@ def _read_multipoint(
         dataset_kwargs: Dataset-read keyword arguments for ``point`` (nodata,
             unscale, resampling, reprojection).
 
-    A bad band selection (an out-of-range index, or a duplicate-derived-name
-    expression) is rejected here as a ``BadRequestError`` by the guards this
-    calls, which the host application's titiler exception handlers render as a
-    400 response.
-
     Returns:
         tuple[list[PointData | None], Info]: One sample per position (``None`` for
             an out-of-bounds position) and the reader's dataset info.
     """
     with reader(src_path) as src_dst:
         info = src_dst.info()
-        _validate_band_indexes(band_kwargs.get("indexes"), info)
-
-        # Validate a band expression once, before sampling every position: a
-        # duplicate-derived-name expression would otherwise read all N positions
-        # before failing in band resolution. _resolve_read_bands re-derives the
-        # names later; this call is just the pre-read guard.
-        if (expression := band_kwargs.get("expression")) is not None:
-            _expression_band_names(expression)
+        _validate_band_selection(band_kwargs, info)
 
         samples: list[PointData | None] = []
 
@@ -703,11 +695,12 @@ def _read_polygon_image(
     nodata pixels) are masked. Returns the clipped image alongside the reader's
     dataset ``info``. A polygon outside the dataset does not raise: rio-tiler's
     ``feature`` returns an all-masked array, which the caller reduces to ``null``.
-    An out-of-range band index, or a read over the cell-count ceiling, is
-    rejected with ``BadRequestError`` by the guards this calls (rendered as a
-    400 by the host application's titiler exception handlers). The ceiling
-    bounds ``width * height * bands`` over the polygon's bounding box, not the
-    box alone, because ``feature`` allocates one array per selected band.
+    An invalid band selection (a malformed expression, or a band the dataset does
+    not have), or a read over the cell-count ceiling, is rejected with
+    ``BadRequestError`` by the guards this calls (rendered as a 400 by the host
+    application's titiler exception handlers). The ceiling bounds ``width * height *
+    bands`` over the polygon's bounding box, not the box alone, because ``feature``
+    allocates one array per selected band.
 
     The read is bounded before allocation, since it is native-resolution (no
     ``max_size``, so a downstream zonal statistic stays exact) and an enormous
@@ -743,7 +736,7 @@ def _read_polygon_image(
 
     with reader(src_path) as src_dst:
         info = src_dst.info()
-        _validate_band_indexes(band_kwargs.get("indexes"), info)
+        _validate_band_selection(band_kwargs, info)
 
         # Bound the read on the destination grid feature() will allocate (the same
         # dimensions _resolve_grid_dimensions vets for /bbox), not a source-grid
@@ -1322,6 +1315,109 @@ def _selected_band_count(dataset: DatasetReader, band_kwargs: dict[str, Any]) ->
     return len(non_alpha_indexes(dataset))
 
 
+def _validate_band_selection(band_kwargs: dict[str, Any], info: Info) -> None:
+    """Reject an invalid band selection before reading it.
+
+    This is the single guard every read path calls. It runs two checks:
+
+    - :func:`_validate_band_indexes` on every call, rejecting an index outside
+      ``1..band_count`` or one requested more than once. It returns immediately
+      when the request supplies no indexes, which is why it needs no condition.
+      ``bidx`` and ``parameter-name`` both resolve upstream to ``indexes``.
+    - :func:`_validate_expression_bands` when the request supplied an
+      ``expression`` (``"b1+b2"``), which identifies its bands in the expression
+      text.
+      It rejects a reference that is not a band number, or that falls outside
+      ``1..band_count``. A band referenced more than once (``b1+b1``) is
+      legitimate and allowed.
+
+    The selectors are mutually exclusive, but that is enforced upstream rather
+    than here, so the index check is unconditional: a selection carrying both is
+    checked for both rather than half-checked. A request with no band selector
+    at all passes both checks untouched, because the read returns every band.
+
+    The rules divide by scope, not by selector. Most are properties of the
+    request alone and consult no dataset: a blank or missing ``;``-separated
+    block, two blocks deriving the same band name, a ``b`` reference whose digits
+    are not a band number. Only the range check reads ``info``, for the dataset's
+    full band count.
+
+    Both checks raise ``BadRequestError``, which the host application's titiler
+    exception handlers render as a 400 response.
+
+    Args:
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
+        info: The reader's dataset info, used for the band count.
+    """
+    # Issue #104 tracks moving the request-only rules to CovJSONBandParams, which
+    # runs before the dataset is opened. Only the range check has to stay here.
+    if (expression := band_kwargs.get("expression")) is not None:
+        _validate_expression_bands(expression, info)
+
+    # Unconditional rather than an `else` on the expression branch: exclusivity
+    # is an invariant of CovJSONBandParams, not of this signature's plain dict,
+    # so an `else` would trade a guard for an assumption held a layer up and let
+    # a selection carrying both keys skip the index check entirely.
+    _validate_band_indexes(band_kwargs.get("indexes"), info)
+
+
+def _validate_expression_bands(expression: str, info: Info) -> None:
+    """Reject an expression referencing a band the dataset does not have.
+
+    rio-tiler resolves an expression's ``b<N>`` references to 1-based band
+    indexes and reads those bands directly, so a reference the dataset cannot
+    satisfy escapes as a bare ``IndexError`` from rasterio (``b9`` or ``b0`` on
+    a two-band source). A reference whose digits are not a number at all fails
+    earlier still, as a bare ``ValueError`` from the reference parser
+    (``b1+b2b``). Neither exception carries a status mapping, so both render as
+    a misleading 500 with no fault the caller can act on. Both are plain
+    client input, so this turns them into actionable 400s, as
+    :func:`_validate_band_indexes` does for an index selection.
+
+    The band count is the dataset's own, alpha band included: unlike a
+    no-selector read, which drops alpha, an expression may reference any band
+    the dataset has.
+
+    Args:
+        expression: The ``;``-separated band expression.
+        info: The reader's dataset info, used for the band count.
+
+    Raises:
+        BadRequestError: If a ``;``-separated block is blank, if the
+            expression references no bands at all, if two blocks derive the
+            same band name, if the expression cannot be parsed for its band
+            references, or
+            if it references a band outside ``1..band_count``.
+    """
+    # Our own block rules run first: parse_expression raises rio-tiler's error on
+    # a degenerate expression, and ours identifies the fault.
+    _expression_band_names(expression)
+
+    try:
+        indexes = parse_expression(expression)
+    # A non-numeric band reference fails as a bare ValueError from int(), which
+    # rio-tiler does not wrap in its own InvalidExpression (that one titiler
+    # already maps to a 400, so it is left to propagate).
+    except ValueError as exc:
+        msg = (
+            f"Invalid band reference in expression {expression!r}: every 'b' "
+            f"reference must be a band number ({exc})."
+        )
+        raise BadRequestError(msg) from None
+
+    band_count = len(info.band_descriptions)
+
+    if out_of_range := tuple(sorted(i for i in indexes if i < 1 or band_count < i)):
+        msg = (
+            f"Requested band index out of range: dataset has {band_count} "
+            f"band(s); expression {expression!r} references band(s) "
+            f"{out_of_range}."
+        )
+        raise BadRequestError(msg)
+
+
 def _validate_band_indexes(indexes: tuple[int, ...] | None, info: Info) -> None:
     """Reject out-of-range or duplicate band indexes before reading.
 
@@ -1330,8 +1426,8 @@ def _validate_band_indexes(indexes: tuple[int, ...] | None, info: Info) -> None:
     ``CoverageInput`` uniqueness check later rejects with a bare ``ValueError``
     (also a 500). Both are plain client input, so this pre-validation turns them
     into actionable 400s. Covers ``bidx`` and ``parameter-name`` (both resolve to
-    indexes); duplicate band references inside an ``expression`` are handled
-    where the expression is parsed.
+    indexes). The equivalent rules for an ``expression`` are
+    :func:`_validate_expression_bands`.
 
     Args:
         indexes: The requested 1-based band indexes, or ``None``.
@@ -1369,8 +1465,9 @@ def _build_grid_input(
     Args:
         image: The read image.
         info: The reader's dataset info (for source band metadata).
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
         crs: The CRS to label the coverage with.
 
     Returns:
@@ -1396,8 +1493,9 @@ def _build_point_input(
     Args:
         point: The read point sample.
         info: The reader's dataset info (for source band metadata).
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
         position: The sampled position, in ``crs``.
         crs: The CRS to label the coverage with.
 
@@ -1427,8 +1525,9 @@ def _build_multipoint_input(
     Args:
         samples: One entry per position (``None`` for an out-of-bounds position).
         info: The reader's dataset info (for source band metadata).
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
         geometry: The sampled positions, in ``crs``.
         crs: The CRS to label the coverage with.
 
@@ -1465,8 +1564,9 @@ def _build_polygon_input(
     Args:
         image: The polygon-clipped image.
         info: The reader's dataset info (for source band metadata).
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
         polygon: The polygon the reduced values summarize, in ``crs``.
         stat: The statistic to reduce each band by.
         crs: The CRS to label the coverage with.
@@ -1500,8 +1600,9 @@ def _resolve_read_bands(
     Args:
         read: The read image or point sample.
         info: The reader's dataset info (for source band metadata).
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
 
     Returns:
         tuple[BandInfo, ...]: One entry per returned band, in band order.
@@ -1547,8 +1648,9 @@ def _resolve_unread_bands(
 
     Args:
         info: The reader's dataset info.
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
 
     Returns:
         tuple[BandInfo, ...]: One entry per selected band, in request order.
