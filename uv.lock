@@ -2477,7 +2477,7 @@ wheels = [
 
 [[package]]
 name = "titiler-core"
-version = "2.2.1"
+version = "2.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -2493,9 +2493,9 @@ dependencies = [
     { name = "simplejson" },
     { name = "starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/ee/0b5fa5ace09943103db953115a994295e4cb3da26a3bfa53319b654a6150/titiler_core-2.2.1.tar.gz", hash = "sha256:61bd6fe35e766795ec9acc2ad58351426802e8ee6d06925724d3084fc20a53ed", size = 70324, upload-time = "2026-07-29T16:03:22.154Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/df/4e/781f7f966073c6c08a2d3f5139c1a725c183d2a7476946f47929a9648edf/titiler_core-2.2.2.tar.gz", hash = "sha256:6b4143c6561efc1597b5a462115216f5b1de6a586fa6082e46428c200af5b210", size = 70409, upload-time = "2026-09-09T08:54:08.636Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/de/6ec9fe2d24508308d57b66db7060ca24b2e9c39dd9b9d95fabc365f39302/titiler_core-2.2.1-py3-none-any.whl", hash = "sha256:82ae4511d33ff26da0097d58cb0e34b61ef4a20b91589d1586d9f24be64aadf0", size = 88825, upload-time = "2026-07-29T16:03:15.701Z" },
+    { url = "https://files.pythonhosted.org/packages/74/cf/fbe9a7f24149b5e384b411bd4647a3ca1f33f1ff5f0fcac87a32c71d6b27/titiler_core-2.2.2-py3-none-any.whl", hash = "sha256:30f9a8688339a547b9a397bb88b4ee620e3bcee5fcd797e10f3d2caeba01a820", size = 88828, upload-time = "2026-09-09T08:54:01.928Z" },
 ]
 
 [[package]]
