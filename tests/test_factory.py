@@ -6,7 +6,7 @@ import rasterio
 from conftest import validate_covjson
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from rio_tiler.expression import parse_expression
+from rasterio.vrt import WarpedVRT
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData, Info, PointData
 from titiler.core.errors import (
@@ -19,10 +19,10 @@ from titiler_covjson.factory import (
     DEFAULT_MAX_COORDS_LENGTH,
     CovJSONFactory,
     _output_grid_dimensions,
+    _reads_through_vrt,
     _resolve_grid_dimensions,
     _resolve_read_bands,
     _resolve_unread_bands,
-    _selected_band_count,
     _validate_band_selection,
 )
 from titiler_covjson.responses import COVJSON_MEDIA_TYPE
@@ -697,58 +697,183 @@ def test_resolve_grid_dimensions_matches_rio_tiler(
     assert predicted == (image.width, image.height)
 
 
-@pytest.mark.parametrize(
-    "band_kwargs",
-    [
+# One entry per pair, not per request: the same dataset at the same size, with a
+# single variable changed between the two. The served request allocates only
+# what it returns, and its partner allocates one array more and crosses the
+# ceiling. That served/rejected split is the measurement, and nothing here
+# asserts how many arrays are read, which is what keeps it a measurement of the
+# real read rather than a restatement of the counting rule.
+#
+# Both halves live in one parameter so neither can be dropped alone, since a
+# lone survivor passes whether or not the count is right. Sizes are chosen
+# against DEFAULT_MAX_CELLS: 2048x2048 equals it, so one array fits and two do
+# not, and 1200x1100 admits three arrays but not four.
+_CEILING_PAIRS = [
+    pytest.param(
+        "scaled_int_cog_path",
+        2048,
+        2048,
         {},
-        {"indexes": (1,)},
-        {"indexes": (2, 1)},
-        {"expression": "b1;b2/b1;b1*2"},
+        {"crs": "EPSG:3857"},
+        2,
+        id="reprojecting-gains-a-vrt-alpha-band",
+    ),
+    pytest.param(
+        "rgba_cog_path",
+        1200,
+        1100,
+        {"nodata": "0"},
+        {},
+        4,
+        id="alpha-read-as-mask-unless-nodata-overrides",
+    ),
+    pytest.param(
+        "cog_path",
+        2048,
+        2048,
+        {"bidx": "1"},
         {"expression": "b1+b2"},
-    ],
-    ids=["all-bands", "one-index", "reordered-indexes", "expression", "fan-in"],
-)
-def test_selected_band_count_never_undercounts_the_read(
-    cog_path: str, band_kwargs: dict[str, object]
-) -> None:
-    # Lock-in, the band-axis counterpart of the dimension parity above: the
-    # ceiling multiplies by this count before the read, so it must never be
-    # below the arrays the read allocates, or the ceiling would guard fewer than
-    # exist and silently reopen the DoS. The "fan-in" case is the one that makes
-    # this bite: b1+b2 returns a single band but reads two source arrays, so a
-    # count of the returned bands would understate it.
-    with Reader(cog_path) as src:
-        predicted = _selected_band_count(src.dataset, band_kwargs)
-        image = src.part(
-            _FULL_BOUNDS,
-            dst_crs=src.dataset.crs,
-            bounds_crs=src.dataset.crs,
-            **band_kwargs,
-        )
-        expression = band_kwargs.get("expression")
-        source_arrays = (
-            len(parse_expression(str(expression))) if expression else image.count
-        )
-
-    assert predicted >= source_arrays
-    assert predicted >= image.count
+        3,
+        id="expression-reads-more-source-arrays-than-it-returns",
+    ),
+]
 
 
 @pytest.mark.parametrize(
-    "band_kwargs",
-    [{}, {"indexes": (2, 1)}, {"expression": "b1;b2/b1"}],
-    ids=["all-bands", "reordered-indexes", "expression"],
+    ("cog_fixture", "width", "height", "served", "rejected", "arrays"), _CEILING_PAIRS
+)
+def test_ceiling_counts_arrays_the_read_does_not_return(
+    request: pytest.FixtureRequest,
+    client: TestClient,
+    cog_fixture: str,
+    width: int,
+    height: int,
+    served: dict[str, str],
+    rejected: dict[str, str],
+    arrays: int,
+) -> None:
+    # A read routed through a WarpedVRT is handed an alpha band the source
+    # lacks, and a nodata value removes the mask read again. Neither fact is
+    # visible from the band selection, which is what these pairs pin.
+    common = {
+        "url": request.getfixturevalue(cog_fixture),
+        "width": width,
+        "height": height,
+    }
+    within = client.get("/bbox/-10,-5,10,5", params=common | served)
+    over = client.get("/bbox/-10,-5,10,5", params=common | rejected)
+
+    assert within.status_code == 200, within.text
+    assert over.status_code == 400, over.text
+
+    # The array count is asserted, not just the status. /bbox answers 400 from
+    # several other guards, so a status-only check would pass even if the
+    # rejection came from the thin-bbox or band-selection rule and the alpha
+    # counting were gone.
+    assert f"{width}x{height}x{arrays} (w x h x bands)" in over.json()["detail"]
+
+
+def test_ceiling_counts_the_alpha_band_a_configured_vrt_adds(
+    client: TestClient, cutline_reader_client: TestClient, scaled_int_cog_path: str
+) -> None:
+    # A read goes through a WarpedVRT on any of three conditions, and
+    # reprojection is only one of them. Here the CRS is unchanged and the host
+    # has configured the reader with vrt_options, which routes the read through
+    # a VRT anyway, so the same single-band source costs a second array.
+    #
+    # The pair is two factories rather than two requests, because what differs
+    # is how the deployment wired its reader, not anything a caller can send.
+    params: dict[str, str | int] = {
+        "url": scaled_int_cog_path,
+        "width": 2048,
+        "height": 2048,
+    }
+
+    served = client.get("/bbox/-10,-5,10,5", params=params)
+
+    assert served.status_code == 200, served.text
+
+    over = cutline_reader_client.get("/bbox/-10,-5,10,5", params=params)
+
+    assert over.status_code == 400, over.text
+    assert "2048x2048x2 (w x h x bands)" in over.json()["detail"]
+
+
+def test_backstop_counts_every_array_the_read_allocates(
+    cutline_reader_client: TestClient, scaled_int_cog_path: str
+) -> None:
+    # The post-read backstop must count the arrays the read allocated, not
+    # just the bands it returned, or it passes a read it should reject. It is
+    # reached only when the pre-read guard mispredicts the grid, and a reader
+    # with vrt_options causes that, because its read goes through a WarpedVRT
+    # that sizes this sub-pixel window (1.4 x 0.6 pixels) as 1x1. So the read
+    # allocates 2048x2048 where 2048x878 was predicted: two arrays of that
+    # exceed the default ceiling, and one does not. The grid label is not
+    # asserted, so this holds whichever guard catches it.
+    response = cutline_reader_client.get(
+        "/bbox/0,0,7,1.5", params={"url": scaled_int_cog_path, "width": 2048}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "2048x2048x2 (w x h x bands)" in response.json()["detail"]
+
+
+def test_reads_through_vrt_sees_a_dataset_that_already_is_one(
+    scaled_int_cog_path: str,
+) -> None:
+    # The remaining condition: the dataset handed to the read is already a
+    # WarpedVRT. Asserted directly rather than through a request, because the
+    # other two terms are false here, the CRS is unchanged and there are no
+    # vrt_options, so nothing else can account for the answer.
+    with rasterio.open(scaled_int_cog_path) as src, WarpedVRT(src) as vrt:
+        assert vrt.crs == src.crs
+
+        assert _reads_through_vrt(vrt, vrt.crs, vrt_options=None)
+        assert not _reads_through_vrt(src, src.crs, vrt_options=None)
+
+
+@pytest.mark.parametrize(
+    ("cog_fixture", "band_kwargs"),
+    [
+        pytest.param("cog_path", {}, id="no-alpha-all-bands"),
+        pytest.param("cog_path", {"indexes": (2, 1)}, id="no-alpha-indexes"),
+        pytest.param("cog_path", {"expression": "b1;b2/b1"}, id="no-alpha-expression"),
+        pytest.param(
+            "rgba_cog_path",
+            {},
+            id="alpha-all-bands",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "developmentseed/titiler-covjson#105: with no selector, "
+                    "_resolve_unread_bands keeps the alpha band that the read "
+                    "drops, so the two resolvers disagree"
+                ),
+            ),
+        ),
+        pytest.param("rgba_cog_path", {"indexes": (2, 1)}, id="alpha-indexes"),
+        pytest.param(
+            "rgba_cog_path", {"expression": "b1;b2/b1"}, id="alpha-expression"
+        ),
+    ],
 )
 def test_unread_band_names_match_resolved_read_bands(
-    cog_path: str, band_kwargs: dict[str, object]
+    request: pytest.FixtureRequest, cog_fixture: str, band_kwargs: dict[str, object]
 ) -> None:
-    # The naming counterpart of the count lock-in above, and a separate concern:
-    # the two resolvers are the only sources of band metadata, and a multipoint
-    # that sampled every position outside the dataset takes the unread one while
-    # every successful read takes the other. They must not drift apart. Note the
-    # names are ours, not rio-tiler's, which numbers expression outputs
-    # positionally (b1, b2, ...) and would collide with source band names.
-    with Reader(cog_path) as src:
+    # _resolve_unread_bands and _resolve_read_bands are the only sources of
+    # band metadata, and a multipoint that sampled every position outside the
+    # dataset takes the first while every successful read takes the second.
+    # They must not drift apart. The names are ours, not rio-tiler's, which
+    # numbers expression outputs positionally (b1, b2, ...) and would collide
+    # with source band names.
+    #
+    # Run over the alpha fixture too, because a selector-free read is the one
+    # case where the resolvers can disagree: both derive from the request when
+    # indexes or an expression select the bands, but with no selector one walks
+    # every band description while the other sees what the read returned. That
+    # case is xfailed rather than omitted, so the gap stays visible and the
+    # strict marker turns it red the moment it is fixed.
+    with Reader(request.getfixturevalue(cog_fixture)) as src:
         info = src.info()
         unread = _resolve_unread_bands(info, band_kwargs)
         image = src.part(
@@ -1790,6 +1915,74 @@ def test_area_expression_bands_count_toward_ceiling(
     assert "exceeds limit" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("served_by", "nodata"),
+    [
+        pytest.param("alpha_ceiling_client", {"nodata": "0"}, id="request-nodata"),
+        pytest.param("nodata_reader_client", {}, id="reader-nodata"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("path", "sizing"),
+    [
+        pytest.param("/area", {"coords": _FULL_EXTENT_POLYGON}, id="area"),
+        pytest.param("/bbox/-10,-5,10,5", {"width": 16, "height": 16}, id="bbox"),
+    ],
+)
+def test_ceiling_skips_the_alpha_array_when_nodata_is_set(
+    request: pytest.FixtureRequest,
+    alpha_ceiling_client: TestClient,
+    rgba_cog_path: str,
+    path: str,
+    sizing: dict[str, str | int],
+    served_by: str,
+    nodata: dict[str, str],
+) -> None:
+    # A nodata value skips the alpha mask read whether the request supplies it
+    # or the host sets it on its reader, so the ceiling must not count that
+    # array. Each served case pairs with the same rejected request, which has
+    # no nodata, so its read takes the alpha band as a fourth array. /area is
+    # covered alongside /bbox because it reads through feature(), and since it
+    # takes no width or height, its pair turns on nodata rather than on size.
+    params = {"url": rgba_cog_path, **sizing}
+
+    served = request.getfixturevalue(served_by).get(path, params=params | nodata)
+
+    assert served.status_code == 200, served.text
+
+    over = alpha_ceiling_client.get(path, params=params)
+
+    assert over.status_code == 400, over.text
+    assert "16x16x4 (w x h x bands)" in over.json()["detail"]
+
+
+def test_area_applies_a_configured_vrt_and_counts_its_alpha_band(
+    cutline_reader_client: TestClient,
+    cutline_reader_ceiling_client: TestClient,
+    scaled_int_cog_path: str,
+) -> None:
+    # The /area counterpart of
+    # test_ceiling_counts_the_alpha_band_a_configured_vrt_adds, in two halves.
+    # The served mean shows that the reader's cutline reached the read: it
+    # averages only the top-left quarter CutlineReader keeps (2550, 2551, 2554,
+    # 2555), where the whole source averages 2557.5. The rejection shows that
+    # the count includes the alpha band the cutline's WarpedVRT adds. Neither
+    # half suffices alone, because a count that adds an array for a VRT the read
+    # never goes through passes the rejection, and one that leaves out a VRT the
+    # read does go through passes the mean.
+    params = {"url": scaled_int_cog_path, "coords": _FULL_EXTENT_POLYGON}
+
+    clipped = cutline_reader_client.get("/area", params=params)
+
+    assert clipped.status_code == 200, clipped.text
+    assert clipped.json()["ranges"]["b1"]["values"] == [2552.5]
+
+    over = cutline_reader_ceiling_client.get("/area", params=params)
+
+    assert over.status_code == 400, over.text
+    assert "4x4x2 (w x h x bands)" in over.json()["detail"]
+
+
 def test_area_hole_beyond_exterior_bounded_before_read(
     small_ceiling_client: TestClient, cog_path: str
 ) -> None:
@@ -1982,6 +2175,59 @@ def test_names_blank_expression_block_on_every_route(
 
     assert response.status_code == 400, response.text
     assert "Blank sub-expression" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [{"expression": "b4"}, {"bidx": "4"}, {"parameter-name": "b4"}],
+    ids=["expression", "bidx", "parameter-name"],
+)
+def test_every_selector_serves_the_alpha_band(
+    client: TestClient, rgba_cog_path: str, selector: dict[str, str]
+) -> None:
+    # The alpha band is addressable by every selector, so all three are covered
+    # even though they travel only two paths: CovJSONBandParams folds bidx and
+    # parameter-name into indexes, while expression keeps its own band
+    # references. Covering all three exercises that fold rather than assuming
+    # it.
+    #
+    # The served value is asserted, not just the key, so reading the wrong band
+    # under the right name fails. Each color band is the same ramp shifted by a
+    # constant (b1 by 10, b2 by 20, b3 by 30) and the alpha band is a flat 255,
+    # so all four differ at every pixel even though their ranges overlap.
+    served = client.get("/bbox/-10,-5,10,5", params={"url": rgba_cog_path, **selector})
+
+    assert served.status_code == 200, served.text
+
+    ranges = served.json()["ranges"]
+
+    assert list(ranges) == ["b4"]
+    assert ranges["b4"]["values"][0] == 255
+
+
+def test_alpha_band_is_dropped_from_the_output_but_still_counted(
+    client: TestClient, rgba_cog_path: str
+) -> None:
+    # The counterpart to test_every_selector_serves_the_alpha_band. Both halves
+    # are asserted together because the difference between them is the point: b4
+    # is absent from a no-selector read yet servable when selected, and the range
+    # check counts every band description rather than the non-alpha subset, so
+    # b5 is what shows the denominator is 4 and not 3.
+    dropped = client.get("/bbox/-10,-5,10,5", params={"url": rgba_cog_path})
+
+    assert dropped.status_code == 200, dropped.text
+
+    ranges = dropped.json()["ranges"]
+
+    assert list(ranges) == ["b1", "b2", "b3"]
+    assert [ranges[band]["values"][0] for band in ("b1", "b2", "b3")] == [10, 20, 30]
+
+    rejected = client.get(
+        "/bbox/-10,-5,10,5", params={"url": rgba_cog_path, "expression": "b5"}
+    )
+
+    assert rejected.status_code == 400, rejected.text
+    assert "dataset has 4 band(s)" in rejected.json()["detail"]
 
 
 def _published_coords_bounds(client: TestClient) -> dict[str, int | None]:

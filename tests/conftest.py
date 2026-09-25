@@ -15,6 +15,8 @@ import rasterio.transform
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from rasterio.enums import ColorInterp
+from rio_tiler.io import Reader
 from titiler.core.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 
 from titiler_covjson.factory import (
@@ -149,6 +151,23 @@ def global_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     return path
 
 
+@pytest.fixture(scope="session")
+def rgba_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Write a 16x16 RGBA EPSG:4326 COG whose band 4 is tagged as alpha.
+
+    The only fixture carrying an alpha band, so it is what distinguishes the two
+    band denominators: a read with no band selector drops the alpha band, while
+    a selector may request it explicitly. Session-scoped.
+
+    Returns:
+        str: Filesystem path to the written COG.
+    """
+    path = str(tmp_path_factory.mktemp("data") / "rgba.tif")
+    _write_rgba_cog(path)
+
+    return path
+
+
 @pytest.fixture
 def client() -> TestClient:
     """Return a TestClient over an app mounting a default CovJSONFactory.
@@ -187,15 +206,107 @@ def single_band_ceiling_client() -> TestClient:
     """Return a TestClient over a factory whose ceiling allows one band.
 
     The default ceiling carries a band allowance, so a full-extent multi-band
-    read fits under it; this factory drops that allowance, leaving room for one
-    band of the largest unsized read (a ``DEFAULT_MAX_SIZE`` square), which is
-    the construction invariant's floor. Used where a test needs a grid alone to
-    reach the ceiling.
+    read fits under it. This factory drops that allowance, leaving room for one
+    array of the largest unsized read (a ``DEFAULT_MAX_SIZE`` square), which is
+    the construction invariant's floor. A read needing a second array, such as a
+    reprojecting read that gains an alpha band, is coarsened to fit rather than
+    rejected. Used where a test needs a grid alone to reach the ceiling.
 
     Returns:
         TestClient: Client whose factory uses ``max_cells=DEFAULT_MAX_SIZE ** 2``.
     """
     return _make_client(max_cells=DEFAULT_MAX_SIZE**2)
+
+
+class CutlineReader(Reader):
+    """A ``Reader`` carrying VRT options, as a host would configure one.
+
+    The factory takes a reader *type*, so a configured reader is expressed as a
+    subclass rather than a bound callable. VRT options send a read through a
+    ``WarpedVRT`` even when the CRS is unchanged, which is one of the three
+    conditions that can add an alpha band the source does not have.
+
+    GDAL reads a cutline in the source's pixel coordinates, not its CRS. This
+    one covers the top-left 2x2 pixels, so on the 4x4 ``scaled_int_cog_path``
+    it keeps the values 2550, 2551, 2554 and 2555 and masks the rest, which
+    makes it observable whether the cutline reached the read.
+    """
+
+    def __attrs_post_init__(self) -> None:
+        """Open the dataset, then attach the cutline the read will use."""
+        super().__attrs_post_init__()
+        self.options = {
+            "vrt_options": {"cutline": "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))"}
+        }
+
+
+class NodataReader(Reader):
+    """A ``Reader`` carrying its own nodata value, as a host would configure one.
+
+    A nodata value overrides the alpha mask read, so on ``rgba_cog_path`` a
+    read through this reader allocates the three color arrays and not the
+    alpha one, exactly as a request supplying ``nodata=0`` does.
+    """
+
+    def __attrs_post_init__(self) -> None:
+        """Open the dataset, then attach the nodata value the read will use."""
+        super().__attrs_post_init__()
+        self.options = {"nodata": 0}
+
+
+@pytest.fixture
+def cutline_reader_client() -> TestClient:
+    """Return a TestClient whose factory opens datasets through a configured reader.
+
+    Returns:
+        TestClient: Client whose reader carries a cutline in ``vrt_options``.
+    """
+    return _make_client(reader=CutlineReader)
+
+
+@pytest.fixture
+def cutline_reader_ceiling_client() -> TestClient:
+    """Return a TestClient over ``CutlineReader`` with a one-array ceiling.
+
+    The ceiling is ``small_ceiling_client``'s, which admits one array of the 4x4
+    ``scaled_int_cog_path`` (16 cells) but not the two a read through the
+    cutline's ``WarpedVRT`` allocates.
+
+    Returns:
+        TestClient: Client whose factory uses ``CutlineReader``,
+            ``default_max_size=4`` and ``max_cells=16``.
+    """
+    return _make_client(default_max_size=4, max_cells=16, reader=CutlineReader)
+
+
+@pytest.fixture
+def nodata_reader_client() -> TestClient:
+    """Return a TestClient over ``NodataReader`` with a three-array ceiling.
+
+    The ceiling is ``alpha_ceiling_client``'s, which admits the three color
+    arrays of ``rgba_cog_path`` but not the alpha one as well.
+
+    Returns:
+        TestClient: Client whose factory uses ``NodataReader``,
+            ``default_max_size=16`` and ``max_cells=768``.
+    """
+    return _make_client(default_max_size=16, max_cells=768, reader=NodataReader)
+
+
+@pytest.fixture
+def alpha_ceiling_client() -> TestClient:
+    """Return a TestClient whose ceiling admits three arrays of ``rgba_cog_path``.
+
+    That fixture is 16x16, so three arrays are 768 cells and four are 1024. A
+    ceiling of 768 therefore separates a read that takes the three color bands
+    from one that also reads the alpha band as its mask, which is the only
+    difference ``nodata`` makes to a native-resolution ``/area`` read.
+
+    Returns:
+        TestClient: Client whose factory uses ``default_max_size=16,
+            max_cells=768``.
+    """
+    return _make_client(default_max_size=16, max_cells=768)
 
 
 @pytest.fixture
@@ -277,6 +388,7 @@ def _make_client(
     default_max_size: int = DEFAULT_MAX_SIZE,
     max_cells: int = DEFAULT_MAX_CELLS,
     max_samples: int = DEFAULT_MAX_SAMPLES,
+    reader: type[Reader] = Reader,
 ) -> TestClient:
     """Build a TestClient over an app mounting a CovJSONFactory.
 
@@ -288,6 +400,8 @@ def _make_client(
         default_max_size: The factory's downsampling default.
         max_cells: The factory's hard cell-count ceiling.
         max_samples: The factory's cap on the number of MULTIPOINT positions.
+        reader: The reader the factory opens datasets with, which is the seam a
+            host uses to supply a configured one.
 
     Returns:
         TestClient: Client bound to the mounted app.
@@ -296,6 +410,7 @@ def _make_client(
         default_max_size=default_max_size,
         max_cells=max_cells,
         max_samples=max_samples,
+        reader=reader,
     )
     app = FastAPI()
     app.include_router(factory.router)
@@ -382,6 +497,58 @@ def _write_scaled_int_cog(path: str) -> None:
     }
 
     with rasterio.open(path, "w", **profile) as dst:
-        dst.write(band, 1)
+        # Scales and the description are set before the array is written, not
+        # after. Writing them afterwards pushes the main IFD past the image
+        # data, which costs this fixture its COG validity (`cog_validate`
+        # reports the IFD offset and block ordering) for no gain.
         dst.scales = (0.01,)
         dst.set_band_description(1, "temp")
+        dst.write(band, 1)
+
+
+def _write_rgba_cog(path: str) -> None:
+    """Write a 16x16 4-band EPSG:4326 GeoTIFF with an RGBA color interpretation.
+
+    Each color band is a ramp offset by ``10 * N``, so a test asserting which band
+    it received can tell them apart, because an identical ramp on every band would
+    let a read of the wrong band pass as long as the label were right. The ramp is
+    capped well below the ``uint8`` ceiling so the offsets stay offsets, because
+    an uncapped ``0 .. 255`` ramp wraps, which makes the bands cyclic permutations
+    of one another with identical minimum, maximum, sum and mean, and so
+    indistinguishable to every aggregate a zonal reduction can compute.
+
+    The alpha band is fully opaque (``255``), both because that is what a real
+    RGBA source looks like and because rio-tiler reads it as the mask, so a
+    lower value would mask the very pixels a test wants to assert.
+
+    Args:
+        path: Destination filesystem path.
+    """
+    bounds = (-10.0, -5.0, 10.0, 5.0)
+    width = height = 16
+    transform = rasterio.transform.from_bounds(*bounds, width, height)
+    # Modulo keeps the ramp inside 0..99, leaving room for the +10/+20/+30
+    # per-band offsets to stay distinct instead of wrapping into each other.
+    ramp = (np.arange(width * height) % 100).astype("uint8").reshape(height, width)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "uint8",
+        "count": 4,
+        "width": width,
+        "height": height,
+        "crs": pyproj.CRS.from_epsg(4326),
+        "transform": transform,
+    }
+
+    with rasterio.open(path, "w", **profile) as dst:
+        for idx in range(1, 4):
+            dst.write(ramp + 10 * idx, idx)
+
+        dst.write(np.full((height, width), 255, dtype="uint8"), 4)
+
+        dst.colorinterp = (
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.alpha,
+        )

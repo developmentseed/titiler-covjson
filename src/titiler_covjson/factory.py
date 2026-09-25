@@ -33,7 +33,9 @@ from attrs import define
 from covjson_pydantic.coverage import Coverage
 from fastapi import Depends, Path, Query
 from rasterio import windows
+from rasterio.enums import ColorInterp
 from rasterio.io import DatasetReader
+from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_bounds
 from rio_tiler.constants import WGS84_CRS
 from rio_tiler.errors import PointOutsideBounds
@@ -129,7 +131,8 @@ class CovJSONFactory(BaseFactory):
     ``max_cells``, a hard ceiling on the total cells a read allocates
     (``width * height * bands``, where bands counts the full-size arrays the
     read makes: one per source band it reads, plus one per band an
-    ``expression`` derives), bounding ``/bbox`` and ``/area``; and
+    ``expression`` derives, plus one when it reads an alpha band as the
+    mask), bounding ``/bbox`` and ``/area``; and
     ``max_samples``, the cap on the number of positions a ``/position``
     ``MULTIPOINT`` may name (each is one point read). A single ``POINT`` needs
     none of the three.
@@ -173,8 +176,8 @@ class CovJSONFactory(BaseFactory):
         about resolution, not about what is servable: multiply
         ``default_max_size ** 2`` by the widest read to keep at full resolution
         (the band count of the data served, or the widest ``bidx`` or
-        ``expression`` to permit). The default is exactly this, with an
-        allowance of four bands.
+        ``expression`` to permit, plus one when reads take an alpha band as the
+        mask). The default is exactly this, with an allowance of four bands.
 
         ``max_coords_length`` must be at least 1. Zero would build a factory
         that rejects every non-empty ``coords``, and a negative value fails deep
@@ -188,13 +191,15 @@ class CovJSONFactory(BaseFactory):
         if self.max_cells < self.default_max_size**2:
             msg = (
                 f"max_cells ({self.max_cells}) is below default_max_size ** 2 "
-                f"({self.default_max_size**2}). A request naming no size is "
+                f"({self.default_max_size**2}). A request specifying no size is "
                 "served at up to default_max_size on its longest side, so this "
                 "ceiling would reject the factory's own default sizing. Raise "
                 f"max_cells to at least {self.default_max_size**2}, or lower "
-                "default_max_size. That minimum serves a single band at full "
-                "resolution; an N-band read needs max_cells >= N x "
-                "default_max_size ** 2 to avoid being coarsened to fit."
+                "default_max_size. That minimum serves one full-resolution "
+                "array. A read allocates one array per selected band, and one "
+                "more when it reads an alpha band as the mask, so an N-array "
+                "read needs max_cells >= N x default_max_size ** 2 to avoid "
+                "being coarsened to fit."
             )
             raise ValueError(msg)
 
@@ -464,8 +469,9 @@ def _read_bounded_image(
     oversized output grid, is rejected with ``BadRequestError`` via the guards
     this calls: the cell-count ceiling is checked before the read when the output
     dimensions are known and again after as a backstop for the ``max_size``-bounded
-    paths. It bounds ``width * height * bands``, not the grid alone, because the read
-    allocates one array per selected band.
+    paths. It bounds ``width * height * bands``, not the grid alone, where ``bands``
+    counts every full-size array the read allocates, as
+    :func:`_selected_band_count` computes it.
 
     When no sizing is requested, the longest output dimension is capped here so
     a full-extent read stays bounded (rio-tiler reads native at
@@ -499,7 +505,23 @@ def _read_bounded_image(
     with reader(src_path) as src_dst:
         info = src_dst.info()
         _validate_band_selection(band_kwargs, info)
-        bands = _selected_band_count(src_dst.dataset, band_kwargs)
+
+        # A reader can carry its own options, such as nodata or a cutline in
+        # vrt_options, and they change what the read allocates just as the
+        # request's options do. Combine the two (the request's win on a
+        # conflict) and use the result both to count the arrays and for the
+        # read itself, so the count always matches the read.
+        read_options = {**src_dst.options, **dataset_kwargs}
+        bands = _selected_band_count(
+            src_dst.dataset,
+            band_kwargs,
+            reads_through_vrt=_reads_through_vrt(
+                src_dst.dataset,
+                read_crs,
+                vrt_options=read_options.get("vrt_options"),
+            ),
+            nodata=read_options.get("nodata"),
+        )
 
         # When the caller names no sizing the factory supplies its own cap, fitted
         # to the ceiling for this band count so a many-band read comes back
@@ -536,16 +558,17 @@ def _read_bounded_image(
             bounds_crs=read_crs,
             **band_kwargs,
             **part_kwargs,
-            **dataset_kwargs,
+            **read_options,
         )
 
-    # Defense-in-depth backstop: the pre-read guard resolves the exact output
-    # dimensions and band count, so this only bites if either ever diverges from
-    # what part actually produced (lock-in tests guard against silent drift).
+    # Defense-in-depth backstop: the pre-read guard predicts the output grid, so
+    # this re-checks the grid part actually produced. It uses the same array
+    # count as the pre-read guard, because image.count holds only the bands
+    # returned, not the source or alpha arrays the read also allocated.
     _enforce_cell_ceiling(
         image.width,
         image.height,
-        bands=image.count,
+        bands=bands,
         max_cells=max_cells,
         grid_label="Output",
     )
@@ -699,8 +722,9 @@ def _read_polygon_image(
     not have), or a read over the cell-count ceiling, is rejected with
     ``BadRequestError`` by the guards this calls (rendered as a 400 by the host
     application's titiler exception handlers). The ceiling bounds ``width * height *
-    bands`` over the polygon's bounding box, not the box alone, because ``feature``
-    allocates one array per selected band.
+    bands`` over the polygon's bounding box, not the box alone, where ``bands``
+    counts every full-size array ``feature`` allocates, as
+    :func:`_selected_band_count` computes it.
 
     The read is bounded before allocation, since it is native-resolution (no
     ``max_size``, so a downstream zonal statistic stays exact) and an enormous
@@ -738,6 +762,13 @@ def _read_polygon_image(
         info = src_dst.info()
         _validate_band_selection(band_kwargs, info)
 
+        # Combined as in _read_bounded_image. Passing the result to feature()
+        # matters here because, unlike part(), feature() ignores the reader's
+        # own vrt_options unless they are passed in. Without it, the count would
+        # include an extra array for a configured cutline, but the read would
+        # never apply the cutline.
+        read_options = {**src_dst.options, **dataset_kwargs}
+
         # Bound the read on the destination grid feature() will allocate (the same
         # dimensions _resolve_grid_dimensions vets for /bbox), not a source-grid
         # measure. `polygon.bounds` is non-degenerate: the route rejects a
@@ -751,10 +782,20 @@ def _read_polygon_image(
             height=None,
             max_size=None,
         )
+        bands = _selected_band_count(
+            src_dst.dataset,
+            band_kwargs,
+            reads_through_vrt=_reads_through_vrt(
+                src_dst.dataset,
+                read_crs,
+                vrt_options=read_options.get("vrt_options"),
+            ),
+            nodata=read_options.get("nodata"),
+        )
         _enforce_cell_ceiling(
             grid_width,
             grid_height,
-            bands=_selected_band_count(src_dst.dataset, band_kwargs),
+            bands=bands,
             max_cells=max_cells,
             grid_label="Requested",
         )
@@ -772,13 +813,14 @@ def _read_polygon_image(
             shape_crs=read_crs,
             dst_crs=read_crs,
             **band_kwargs,
-            **dataset_kwargs,
+            **read_options,
         )
 
+    # Backstop, as in _read_bounded_image.
     _enforce_cell_ceiling(
         image.width,
         image.height,
-        bands=image.count,
+        bands=bands,
         max_cells=max_cells,
         grid_label="Output",
     )
@@ -1185,7 +1227,7 @@ def _enforce_cell_ceiling(
     Args:
         width: The grid width in cells.
         height: The grid height in cells.
-        bands: The number of bands the read produces, each its own array.
+        bands: The number of full-size arrays the read allocates.
         max_cells: The maximum allowed cell count.
         grid_label: The word labeling the grid in the error message.
 
@@ -1266,7 +1308,13 @@ def _fitted_max_size(default_max_size: int, max_cells: int, bands: int) -> int:
     return max(1, min(default_max_size, math.isqrt(max_cells // bands)))
 
 
-def _selected_band_count(dataset: DatasetReader, band_kwargs: dict[str, Any]) -> int:
+def _selected_band_count(
+    dataset: DatasetReader,
+    band_kwargs: dict[str, Any],
+    *,
+    reads_through_vrt: bool,
+    nodata: float | None,
+) -> int:
     """Count the full-size arrays a read of this band selection allocates.
 
     This is the band axis of the cell ceiling, and it counts *arrays*, not
@@ -1276,43 +1324,149 @@ def _selected_band_count(dataset: DatasetReader, band_kwargs: dict[str, Any]) ->
     the blocks are evaluated. So ``b1+b2+b3`` reads three arrays to return one,
     and counting its single output band would understate the read threefold.
 
-    With no selector the count excludes an alpha band, which a read drops.
+    An alpha band is read as the mask alongside whatever was selected, so it
+    allocates one array beyond the selection, even when the selection excludes
+    it. Two things decide whether that happens, and neither is
+    visible from the selection alone. A ``nodata`` value, the caller's or the
+    dataset's own, overrides the mask read, so no alpha array is allocated. And
+    a read routed through a ``WarpedVRT``, on any of the conditions
+    :func:`_reads_through_vrt` weighs, is given an alpha band even when the
+    source has none, so the source's own color interpretation does not settle it
+    either.
 
     Args:
-        dataset: The open rasterio dataset, for its band count and color
-            interpretation.
-        band_kwargs: The resolved band selection (``{}`` / ``indexes`` /
-            ``expression``).
+        dataset: The open rasterio dataset, for its band count, color
+            interpretation, and nodata value.
+        band_kwargs: The band selection ``to_kwargs`` resolved from the
+            request's band parameters: ``indexes``, ``expression``, or empty
+            when the request supplies no band selector.
+        reads_through_vrt: Whether the read is wrapped in a ``WarpedVRT``, as
+            :func:`_reads_through_vrt` decides.
+        nodata: The caller's nodata override, or ``None`` to use the dataset's.
 
     Returns:
         int: The number of full-size arrays the read allocates.
 
     Examples:
+        Every example here supplies a band selector, and on that path this
+        function reads the ``colorinterp`` and ``nodata`` properties of the
+        ``DatasetReader`` it is given. The examples therefore pass a
+        ``SimpleNamespace`` carrying those two attributes, as a stand-in for
+        the ``DatasetReader``, so that no raster file on disk is needed.
+
+        >>> from types import SimpleNamespace
+        >>> dataset = SimpleNamespace(colorinterp=(), nodata=None)
+        >>> direct = {"reads_through_vrt": False, "nodata": None}
+        >>> through_vrt = {"reads_through_vrt": True, "nodata": None}
+        >>> overridden = {"reads_through_vrt": True, "nodata": 0.0}
+
         An expression allocates one array per source band it references, plus
         one per block it produces:
 
-        >>> from unittest.mock import Mock
-        >>> _selected_band_count(Mock(), {"expression": "b1+b2+b3"})
+        >>> _selected_band_count(dataset, {"expression": "b1+b2+b3"}, **direct)
         4
-        >>> _selected_band_count(Mock(), {"expression": "b1;b1*2"})
+        >>> _selected_band_count(dataset, {"expression": "b1;b1*2"}, **direct)
         3
 
         An index selection allocates exactly what it names:
 
-        >>> _selected_band_count(Mock(), {"indexes": (2, 1)})
+        >>> _selected_band_count(dataset, {"indexes": (2, 1)}, **direct)
         2
+
+        A read through a ``WarpedVRT`` allocates one array beyond the selection
+        even on this source, which has no alpha band, because the VRT adds one:
+
+        >>> _selected_band_count(dataset, {"indexes": (1,)}, **through_vrt)
+        2
+
+        A nodata value overrides the mask read, so the alpha array is not
+        allocated after all:
+
+        >>> _selected_band_count(dataset, {"indexes": (1,)}, **overridden)
+        1
+
+        A dataset carrying its own alpha band allocates one without a VRT too,
+        whatever the selector, because it is read as the mask:
+
+        >>> dataset = SimpleNamespace(colorinterp=(ColorInterp.alpha,), nodata=None)
+        >>> _selected_band_count(dataset, {"indexes": (1,)}, **direct)
+        2
+        >>> _selected_band_count(dataset, {"expression": "b1+b2"}, **direct)
+        4
     """
+    # The governing rule is rio_tiler.reader.read's `ColorInterp.alpha in
+    # dst_colorinterp and nodata is None`. Deliberately not
+    # rio_tiler.utils.has_alpha_band, which is wider, also firing on
+    # MaskFlags.alpha, and which rio-tiler uses for a different decision:
+    # whether the VRT adds a band, not whether one is read as the mask.
+    effective_nodata = nodata if nodata is not None else dataset.nodata
+    reads_alpha = effective_nodata is None and (
+        ColorInterp.alpha in dataset.colorinterp or reads_through_vrt
+    )
+    alpha = int(reads_alpha)
+
     if (expression := band_kwargs.get("expression")) is not None:
-        # Validate first: parse_expression raises its own error on a degenerate
-        # expression, and ours names the fault.
+        # _validate_band_selection has already run at every call site that
+        # reaches here, so this call is for the block count alone, not for the
+        # error it would raise on a degenerate expression.
         blocks = _expression_band_names(expression)
 
-        return len(parse_expression(expression)) + len(blocks)
+        return len(parse_expression(expression)) + len(blocks) + alpha
 
     if (indexes := band_kwargs.get("indexes")) is not None:
-        return len(indexes)
+        return len(indexes) + alpha
 
-    return len(non_alpha_indexes(dataset))
+    return len(non_alpha_indexes(dataset)) + alpha
+
+
+def _reads_through_vrt(
+    dataset: DatasetReader,
+    read_crs: rasterio.CRS,
+    *,
+    vrt_options: dict[str, Any] | None,
+) -> bool:
+    """Report whether a read will be wrapped in a ``WarpedVRT``.
+
+    rio-tiler routes a read through a ``WarpedVRT`` on any of three conditions:
+    the read reprojects, the caller supplied VRT options (a cutline, say), or
+    the dataset already is one. This matters to the cell ceiling because a
+    ``WarpedVRT`` can carry an alpha band the source does not have, and that
+    band is read as the mask, costing one array beyond the selection.
+
+    VRT options reach the read through the reader's own ``options``, so a host
+    that wires a configured reader can trigger this without any request
+    specifying a different CRS.
+
+    Args:
+        dataset: The open rasterio dataset the read will run against.
+        read_crs: The CRS the read produces.
+        vrt_options: The reader's ``vrt_options``, or ``None`` when it has none.
+
+    Returns:
+        bool: Whether the read goes through a ``WarpedVRT``.
+
+    Examples:
+        Real ``CRS`` values, not their string spellings, because that is what
+        the comparison sees in a request:
+
+        >>> from types import SimpleNamespace
+        >>> import rasterio
+        >>> wgs84 = rasterio.CRS.from_epsg(4326)
+        >>> dataset = SimpleNamespace(crs=wgs84)
+        >>> _reads_through_vrt(dataset, wgs84, vrt_options=None)
+        False
+        >>> _reads_through_vrt(dataset, rasterio.CRS.from_epsg(3857), vrt_options=None)
+        True
+
+        VRT options force one even when the CRS is unchanged:
+
+        >>> cutline = {"cutline": "POLYGON ((0 0, 1 0, 1 1, 0 0))"}
+        >>> _reads_through_vrt(dataset, wgs84, vrt_options=cutline)
+        True
+    """
+    return (
+        read_crs != dataset.crs or bool(vrt_options) or isinstance(dataset, WarpedVRT)
+    )
 
 
 def _validate_band_selection(band_kwargs: dict[str, Any], info: Info) -> None:
