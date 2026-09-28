@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
-from conftest import validate_covjson
+from conftest import CutlineReader, validate_covjson
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from rasterio.vrt import WarpedVRT
@@ -374,15 +374,27 @@ def test_factory_rejects_non_positive_max_coords_length(
         {"width": 0},
         {"height": -5},
         {"width": -5, "height": 8},
+        {"max_size": 0},
+        {"max_size": -1},
     ],
-    ids=["zero-both", "zero-lone", "negative-lone", "negative-with-valid"],
+    ids=[
+        "zero-both",
+        "zero-lone",
+        "negative-lone",
+        "negative-with-valid",
+        "zero-max_size",
+        "negative-max_size",
+    ],
 )
 def test_bbox_rejects_non_positive_dimensions(
     client: TestClient, cog_path: str, params: dict[str, int]
 ) -> None:
-    # PartFeatureParams does not constrain width/height to be positive, so a
-    # zero or negative dimension would otherwise be silently mis-sized (0) or
-    # crash rio-tiler with a 500 (negative). The factory rejects it with 400.
+    # PartFeatureParams does not constrain width/height/max_size to be
+    # positive, so a zero or negative value would otherwise be silently
+    # mis-sized (0) or crash rio-tiler with a 500 (negative). A zero max_size is
+    # worse than mis-sized, because rio-tiler reads it as no cap at all and
+    # reads the native window, which the pre-read ceiling would have measured
+    # as a capped one. The factory rejects each with 400.
     response = client.get("/bbox/-10,-5,10,5", params={"url": cog_path, **params})
     assert response.status_code == 400, response.text
     assert "positive integer" in response.json()["detail"]
@@ -633,6 +645,18 @@ _TALL_BOUNDS = (-10.0, -5.0, 0.0, 5.0)  # narrow in x, full in y -> taller windo
 # sub-pixel (and now rejected); use a real multi-pixel box inside the source's
 # 3857 footprint (~+/-1.11e6 m x, +/-5.57e5 m y) to test sizing parity.
 _BOUNDS_3857 = (-1_000_000.0, -500_000.0, 1_000_000.0, 500_000.0)
+# 1.4 by 0.01 pixels of cog_path. A WarpedVRT rounds that window to whole pixels,
+# at least one per axis, so a lone width scales a 1x1 window rather than this
+# sliver.
+_THIN_BOUNDS = (0.0, 0.0, 1.75, 0.00625)
+# 10.4 by 3.6 pixels of cog_path. A WarpedVRT rounds that window to 10 by 4
+# before taking the aspect ratio, so a lone width sizes it differently from a
+# direct read, which keeps the fractional ratio.
+_FRACTIONAL_BOUNDS = (0.0, 0.0, 13.0, 2.25)
+# The pixel counts and window shapes in these comments are cog_path's.
+# gcp_cog_path's VRT grid is 20x10, with square pixels of about 0.99 degrees, so
+# the same boxes read windows of other shapes there. Each case still compares
+# against its own read, so that changes only which sizing branch it exercises.
 
 
 @pytest.mark.parametrize(
@@ -647,6 +671,8 @@ _BOUNDS_3857 = (-1_000_000.0, -500_000.0, 1_000_000.0, 500_000.0)
         (_FULL_BOUNDS, 4326, None, None, 5000),
         (_FULL_BOUNDS, 4326, None, None, None),
         (_TALL_BOUNDS, 4326, None, None, 10),
+        (_THIN_BOUNDS, 4326, 64, None, None),
+        (_FRACTIONAL_BOUNDS, 4326, 100, None, None),
     ],
     ids=[
         "4326-w",
@@ -658,10 +684,22 @@ _BOUNDS_3857 = (-1_000_000.0, -500_000.0, 1_000_000.0, 500_000.0)
         "max_size-clamps-to-native",
         "native",
         "max_size-tall-window",
+        "thin-w",
+        "fractional-w",
+    ],
+)
+@pytest.mark.parametrize(
+    ("reader", "cog_fixture"),
+    [
+        pytest.param(Reader, "cog_path", id="direct"),
+        pytest.param(CutlineReader, "cog_path", id="vrt_options"),
+        pytest.param(Reader, "gcp_cog_path", id="gcp"),
     ],
 )
 def test_resolve_grid_dimensions_matches_rio_tiler(
-    cog_path: str,
+    request: pytest.FixtureRequest,
+    reader: type[Reader],
+    cog_fixture: str,
     bounds: tuple[float, float, float, float],
     read_epsg: int,
     width: int | None,
@@ -674,13 +712,19 @@ def test_resolve_grid_dimensions_matches_rio_tiler(
     # clamp-to-native, and a native read. If it drifts, the cell-count ceiling
     # would guard a different grid than the one allocated, silently reopening the
     # DoS, so this fails loudly if rio-tiler ever changes its derivation.
+    #
+    # Each case also runs through two readers that read through a WarpedVRT even
+    # when the read does not reproject, because rio-tiler sizes those reads on
+    # the VRT's grid too: a reader carrying vrt_options, and a source located by
+    # GCPs, which Reader opens as a WarpedVRT.
     read_crs = rasterio.CRS.from_epsg(read_epsg)
 
-    with Reader(cog_path) as src:
+    with reader(request.getfixturevalue(cog_fixture)) as src:
         predicted = _resolve_grid_dimensions(
             src.dataset,
             bounds,
             read_crs=read_crs,
+            vrt_options=src.options.get("vrt_options"),
             width=width,
             height=height,
             max_size=max_size,
@@ -799,23 +843,21 @@ def test_ceiling_counts_the_alpha_band_a_configured_vrt_adds(
     assert "2048x2048x2 (w x h x bands)" in over.json()["detail"]
 
 
-def test_backstop_counts_every_array_the_read_allocates(
-    cutline_reader_client: TestClient, scaled_int_cog_path: str
+def test_bbox_bounds_a_vrt_read_on_the_vrt_grid_before_reading(
+    cutline_reader_ceiling_client: TestClient, scaled_int_cog_path: str
 ) -> None:
-    # The post-read backstop must count the arrays the read allocated, not
-    # just the bands it returned, or it passes a read it should reject. It is
-    # reached only when the pre-read guard mispredicts the grid, and a reader
-    # with vrt_options causes that, because its read goes through a WarpedVRT
-    # that sizes this sub-pixel window (1.4 x 0.6 pixels) as 1x1. So the read
-    # allocates 2048x2048 where 2048x878 was predicted: two arrays of that
-    # exceed the default ceiling, and one does not. The grid label is not
-    # asserted, so this holds whichever guard catches it.
-    response = cutline_reader_client.get(
-        "/bbox/0,0,7,1.5", params={"url": scaled_int_cog_path, "width": 2048}
+    # A WarpedVRT rounds each axis of its window to whole pixels, at least one,
+    # so this box, 1.4 by 0.01 source pixels, reads a 1x1 window that the lone
+    # width scales to 4x4, not to the 4x1 the sliver's own aspect ratio gives.
+    # The configured cutline sends the read through a VRT without reprojecting,
+    # and the pre-read guard must measure that grid, or the two 4x4 arrays are
+    # allocated before the post-read backstop ("Output") refuses them.
+    response = cutline_reader_ceiling_client.get(
+        "/bbox/0,0,7,0.025", params={"url": scaled_int_cog_path, "width": 4}
     )
 
     assert response.status_code == 400, response.text
-    assert "2048x2048x2 (w x h x bands)" in response.json()["detail"]
+    assert "Requested grid 4x4x2 (w x h x bands)" in response.json()["detail"]
 
 
 def test_reads_through_vrt_sees_a_dataset_that_already_is_one(
@@ -887,11 +929,18 @@ def test_unread_band_names_match_resolved_read_bands(
     assert [band.name for band in unread] == [band.name for band in read]
 
 
-def test_output_grid_dimensions_does_not_reject_subpixel(cog_path: str) -> None:
+@pytest.mark.parametrize("max_size", [None, 8], ids=["native", "max_size"])
+def test_output_grid_dimensions_does_not_reject_subpixel(
+    cog_path: str, max_size: int | None
+) -> None:
     # _output_grid_dimensions only computes the dimensions rio-tiler will read;
     # unlike _resolve_grid_dimensions it does NOT reject a sub-pixel-thin box.
-    # The /area read is permissive: a tiny polygon reads a tiny window (feature()
-    # rounds up to 1x1), so the ceiling helper must not raise on a thin box.
+    # The /area read is permissive: a tiny polygon reads a tiny window, which
+    # rio-tiler sizes at no less than one whole pixel per axis, so the ceiling
+    # helper must not raise on a thin box, and it must match the grid the read
+    # allocates. This compares against a real read itself, because
+    # test_resolve_grid_dimensions_matches_rio_tiler goes through
+    # _resolve_grid_dimensions, which rejects this box before measuring it.
     crs4326 = rasterio.CRS.from_epsg(4326)
     thin = (-0.001, -0.001, 0.001, 0.001)  # far thinner than one source pixel
 
@@ -901,21 +950,24 @@ def test_output_grid_dimensions_does_not_reject_subpixel(cog_path: str) -> None:
                 src.dataset,
                 thin,
                 read_crs=crs4326,
+                vrt_options=None,
                 width=None,
                 height=None,
-                max_size=None,
+                max_size=max_size,
             )
 
         dims = _output_grid_dimensions(
             src.dataset,
             thin,
             read_crs=crs4326,
+            vrt_options=None,
             width=None,
             height=None,
-            max_size=None,
+            max_size=max_size,
         )
+        image = src.part(thin, dst_crs=crs4326, bounds_crs=crs4326, max_size=max_size)
 
-    assert dims == (0, 0)
+    assert dims == (image.width, image.height)
 
 
 def test_bbox_rejects_oversized_output_grid(
@@ -1896,6 +1948,26 @@ def test_area_reprojected_read_bounded_on_destination_grid(
     )
     assert response.status_code == 400, response.text
     assert "exceeds limit" in response.json()["detail"]
+
+
+def test_area_serves_reprojected_read_sized_on_destination_grid(
+    client: TestClient, cog_path: str
+) -> None:
+    # The served counterpart of
+    # test_area_reprojected_read_bounded_on_destination_grid, because a refusal
+    # passes even when the estimate is wrong in the larger direction. These
+    # bounds are in meters, and measured on the source's degree grid they would
+    # span 1,600,000 pixels a side and be refused, although feature() reads an
+    # 18x9 grid in Web Mercator.
+    coords = (
+        "POLYGON((-1000000 -500000, 1000000 -500000, 1000000 500000, "
+        "-1000000 500000, -1000000 -500000))"
+    )
+    response = client.get(
+        "/area", params={"url": cog_path, "coords": coords, "crs": "EPSG:3857"}
+    )
+
+    assert response.status_code == 200, response.text
 
 
 def test_area_reprojected_hole_beyond_exterior_bounded_before_read(

@@ -24,6 +24,7 @@ right status codes.
 # reason.
 
 import dataclasses
+import functools
 import math
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, assert_never
@@ -247,7 +248,9 @@ class CovJSONFactory(BaseFactory):
             _format: Annotated[None, Depends(validate_covjson_format)],
         ) -> CovJSONResponse:
             _validate_bbox(minx, miny, maxx, maxy)
-            _validate_output_dimensions(image_params.width, image_params.height)
+            _validate_output_dimensions(
+                image_params.width, image_params.height, image_params.max_size
+            )
 
             read_crs, label_crs = _resolve_crs(crs)
             _validate_label_crs(label_crs)
@@ -518,18 +521,23 @@ def _read_bounded_image(
         # A reader can carry its own options, such as nodata or a cutline in
         # vrt_options, and they change what the read allocates just as the
         # request's options do. Combine the two (the request's win on a
-        # conflict) and use the result both to count the arrays and for the
-        # read itself, so the count always matches the read.
+        # conflict) and use the result both to size the check and for the read
+        # itself, so the check always matches the read.
         read_options = {**src_dst.options, **dataset_kwargs}
+        vrt_options = read_options.get("vrt_options")
         bands = _selected_band_count(
             src_dst.dataset,
             band_kwargs,
             reads_through_vrt=_reads_through_vrt(
-                src_dst.dataset,
-                read_crs,
-                vrt_options=read_options.get("vrt_options"),
+                src_dst.dataset, read_crs, vrt_options=vrt_options
             ),
             nodata=read_options.get("nodata"),
+        )
+
+        # The check before the read and the backstop after it count the same
+        # arrays, so both are bound to this one count rather than passed it twice.
+        check_cells = functools.partial(
+            _enforce_cell_ceiling, bands=bands, max_cells=max_cells
         )
 
         # When the caller names no sizing the factory supplies its own cap, fitted
@@ -549,17 +557,12 @@ def _read_bounded_image(
             src_dst.dataset,
             bounds,
             read_crs=read_crs,
+            vrt_options=vrt_options,
             width=image_params.width,
             height=image_params.height,
             max_size=part_kwargs.get("max_size"),
         )
-        _enforce_cell_ceiling(
-            grid_width,
-            grid_height,
-            bands=bands,
-            max_cells=max_cells,
-            grid_label="Requested",
-        )
+        check_cells(grid_width, grid_height, grid_label="Requested")
 
         image = src_dst.part(
             bounds,
@@ -571,16 +574,10 @@ def _read_bounded_image(
         )
 
     # Defense-in-depth backstop: the pre-read guard predicts the output grid, so
-    # this re-checks the grid part actually produced. It uses the same array
-    # count as the pre-read guard, because image.count holds only the bands
-    # returned, not the source or alpha arrays the read also allocated.
-    _enforce_cell_ceiling(
-        image.width,
-        image.height,
-        bands=bands,
-        max_cells=max_cells,
-        grid_label="Output",
-    )
+    # this re-checks the grid part actually produced. It takes the pre-read
+    # guard's array count through check_cells, because image.count holds only
+    # the bands returned, not the source or alpha arrays the read also allocated.
+    check_cells(image.width, image.height, grid_label="Output")
 
     return image, info
 
@@ -776,6 +773,7 @@ def _read_polygon_image(
         # apply the reader's own vrt_options at all
         # (https://github.com/cogeotiff/rio-tiler/issues/1005).
         read_options = {**src_dst.options, **dataset_kwargs}
+        vrt_options = read_options.get("vrt_options")
 
         # Bound the read on the destination grid feature() will allocate (the same
         # dimensions _resolve_grid_dimensions vets for /bbox), not a source-grid
@@ -786,6 +784,7 @@ def _read_polygon_image(
             src_dst.dataset,
             polygon.bounds,
             read_crs=read_crs,
+            vrt_options=vrt_options,
             width=None,
             height=None,
             max_size=None,
@@ -794,19 +793,16 @@ def _read_polygon_image(
             src_dst.dataset,
             band_kwargs,
             reads_through_vrt=_reads_through_vrt(
-                src_dst.dataset,
-                read_crs,
-                vrt_options=read_options.get("vrt_options"),
+                src_dst.dataset, read_crs, vrt_options=vrt_options
             ),
             nodata=read_options.get("nodata"),
         )
-        _enforce_cell_ceiling(
-            grid_width,
-            grid_height,
-            bands=bands,
-            max_cells=max_cells,
-            grid_label="Requested",
+
+        # Both checks share one count, as in _read_bounded_image.
+        check_cells = functools.partial(
+            _enforce_cell_ceiling, bands=bands, max_cells=max_cells
         )
+        check_cells(grid_width, grid_height, grid_label="Requested")
 
         # feature() rasterizes the cutline with all_touched=True, hardcoded rather
         # than exposed as a parameter, so every pixel the polygon boundary touches
@@ -825,13 +821,7 @@ def _read_polygon_image(
         )
 
     # Backstop, as in _read_bounded_image.
-    _enforce_cell_ceiling(
-        image.width,
-        image.height,
-        bands=bands,
-        max_cells=max_cells,
-        grid_label="Output",
-    )
+    check_cells(image.width, image.height, grid_label="Output")
 
     return image, info
 
@@ -902,41 +892,53 @@ def _reject_degenerate_polygon(polygon: Polygon) -> None:
         raise BadRequestError(msg)
 
 
-def _validate_output_dimensions(width: int | None, height: int | None) -> None:
-    """Reject a non-positive explicit output ``width`` or ``height``.
+def _validate_output_dimensions(
+    width: int | None, height: int | None, max_size: int | None
+) -> None:
+    """Reject a non-positive explicit output ``width``, ``height``, or ``max_size``.
 
     ``PartFeatureParams`` does not constrain these to be positive, so ``?width=0``
     or ``?width=-5`` reaches the read. A zero or negative dimension is a
     degenerate grid rio-tiler cannot produce (it surfaces as an opaque 500), and
     a zero would also be conflated with an absent dimension; rejecting it up
-    front turns it into an actionable 400.
+    front turns it into an actionable 400. A zero ``max_size`` is worse, because
+    rio-tiler reads it as no cap and reads the native window while the cell
+    ceiling measures it as a cap, so the read would get past the ceiling.
 
     Args:
         width: The requested output width, or ``None``.
         height: The requested output height, or ``None``.
+        max_size: The requested longest-output-dimension cap, or ``None``.
 
     Raises:
-        BadRequestError: If ``width`` or ``height`` is given and is less than 1.
+        BadRequestError: If ``width``, ``height``, or ``max_size`` is given and
+            is less than 1.
 
     Examples:
-        >>> _validate_output_dimensions(256, 128)
-        >>> _validate_output_dimensions(None, None)
-        >>> _validate_output_dimensions(0, 128)
+        >>> _validate_output_dimensions(256, 128, None)
+        >>> _validate_output_dimensions(None, None, None)
+        >>> _validate_output_dimensions(0, 128, None)
         Traceback (most recent call last):
             ...
         titiler.core.errors.BadRequestError: width must be a positive integer; got 0.
+        >>> _validate_output_dimensions(None, None, 0)
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: max_size must be a positive integer;
+        got 0.
     """
-    for name, value in (("width", width), ("height", height)):
+    for name, value in (("width", width), ("height", height), ("max_size", max_size)):
         if value is not None and value < 1:
             msg = f"{name} must be a positive integer; got {value}."
             raise BadRequestError(msg)
 
 
 def _output_grid_dimensions(
-    dataset: DatasetReader,
+    dataset: DatasetReader | WarpedVRT,
     bounds: tuple[float, float, float, float],
     *,
     read_crs: rasterio.CRS,
+    vrt_options: dict[str, Any] | None,
     width: int | None,
     height: int | None,
     max_size: int | None,
@@ -947,16 +949,19 @@ def _output_grid_dimensions(
     count can be checked against the ceiling before the array is read:
 
     - both ``width`` and ``height`` given: returned unchanged (``part`` ignores
-      ``max_size`` then);
+      ``max_size`` then)
     - exactly one given: the other is derived from the read window's aspect
-      ratio (``part`` upsamples the given dimension);
+      ratio (``part`` upsamples the given dimension)
     - neither given: ``max_size`` caps the longer axis of the read window, or,
-      when ``max_size`` is also ``None``, the native window is read.
+      when ``max_size`` is also ``None``, the native window is read, at least one
+      pixel per axis
 
-    A reprojecting read (``read_crs != dataset.crs``) is measured on the
-    *destination* VRT grid, which Web Mercator stretches near the poles far beyond
-    the same box on the source pixel grid, so bounding a reprojecting read on the
-    source grid would under-count it by orders of magnitude. Unlike
+    A read through a ``WarpedVRT`` is measured on the VRT's grid, as rio-tiler
+    sizes it, because that grid can differ from the same box on the source pixel
+    grid. Reprojection stretches it (by orders of magnitude for Web Mercator
+    near the poles), and the VRT rounds each axis of its window to whole pixels,
+    at least one, before a lone ``width`` or ``height`` takes the aspect ratio
+    from it, so even a sub-pixel sliver scales as a whole pixel. Unlike
     :func:`_resolve_grid_dimensions`, this only computes dimensions; it does not
     reject a too-thin box (the ``/area`` read is permissive: a sub-pixel polygon
     reads a tiny window). The caller must pass a non-degenerate box (non-zero
@@ -967,6 +972,10 @@ def _output_grid_dimensions(
         bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
         read_crs: The Coordinate Reference System (CRS) the bounds are expressed
             in and that the read reprojects to.
+        vrt_options: The ``vrt_options`` the read passes to rio-tiler, or
+            ``None`` when it has none. With ``dataset`` and ``read_crs`` they
+            decide whether the read goes through a ``WarpedVRT``, as
+            :func:`_reads_through_vrt` does.
         width: The requested output width, or ``None``.
         height: The requested output height, or ``None``.
         max_size: The longest-output-dimension cap applied when neither width nor
@@ -981,8 +990,8 @@ def _output_grid_dimensions(
         ``bounds`` are unused (hence the placeholder values below):
 
         >>> _output_grid_dimensions(
-        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
-        ...     max_size=None,
+        ...     None, (0, 0, 1, 1), read_crs=None, vrt_options=None,
+        ...     width=256, height=128, max_size=None,
         ... )
         (256, 128)
 
@@ -995,9 +1004,9 @@ def _output_grid_dimensions(
     if width is not None and height is not None:
         return width, height
 
-    # Match part's read window: the reprojected VRT grid when the read
-    # reprojects, else the native window over the source transform.
-    if read_crs != dataset.crs:
+    # Match part's read window: the VRT grid when the read goes through a
+    # WarpedVRT, else the native window over the source transform.
+    if _reads_through_vrt(dataset, read_crs, vrt_options=vrt_options):
         _, window_width, window_height = get_vrt_transform(
             dataset, bounds, height, width, dst_crs=read_crs
         )
@@ -1014,17 +1023,21 @@ def _output_grid_dimensions(
     if height is not None:
         return math.ceil(height / (window_height / window_width)), height
 
-    if max_size is None:
-        return round(window_width), round(window_height)
+    native = round(window_width), round(window_height)
+    grid_width, grid_height = (
+        native if max_size is None else _scale_to_max_size(max_size, *native)
+    )
 
-    return _scale_to_max_size(max_size, round(window_width), round(window_height))
+    # part floors each axis at one pixel after sizing, outside _get_width_height.
+    return max(1, grid_width), max(1, grid_height)
 
 
 def _resolve_grid_dimensions(
-    dataset: DatasetReader,
+    dataset: DatasetReader | WarpedVRT,
     bounds: tuple[float, float, float, float],
     *,
     read_crs: rasterio.CRS,
+    vrt_options: dict[str, Any] | None,
     width: int | None,
     height: int | None,
     max_size: int | None,
@@ -1042,6 +1055,8 @@ def _resolve_grid_dimensions(
         bounds: The output bounds ``(minx, miny, maxx, maxy)`` in ``read_crs``.
         read_crs: The CRS the bounds are expressed in and that the read reprojects
             to.
+        vrt_options: The ``vrt_options`` the read passes to rio-tiler, or
+            ``None`` when it has none.
         width: The requested output width, or ``None``.
         height: The requested output height, or ``None``.
         max_size: The longest-output-dimension cap, or ``None`` to read native.
@@ -1051,8 +1066,8 @@ def _resolve_grid_dimensions(
 
     Examples:
         >>> _resolve_grid_dimensions(
-        ...     None, (0, 0, 1, 1), read_crs=None, width=256, height=128,
-        ...     max_size=None,
+        ...     None, (0, 0, 1, 1), read_crs=None, vrt_options=None,
+        ...     width=256, height=128, max_size=None,
         ... )
         (256, 128)
     """
@@ -1065,6 +1080,7 @@ def _resolve_grid_dimensions(
         dataset,
         bounds,
         read_crs=read_crs,
+        vrt_options=vrt_options,
         width=width,
         height=height,
         max_size=max_size,
@@ -1072,7 +1088,7 @@ def _resolve_grid_dimensions(
 
 
 def _reject_subpixel_bbox(
-    dataset: DatasetReader,
+    dataset: DatasetReader | WarpedVRT,
     bounds: tuple[float, float, float, float],
     read_crs: rasterio.CRS,
 ) -> None:
@@ -1317,7 +1333,7 @@ def _fitted_max_size(default_max_size: int, max_cells: int, bands: int) -> int:
 
 
 def _selected_band_count(
-    dataset: DatasetReader,
+    dataset: DatasetReader | WarpedVRT,
     band_kwargs: dict[str, Any],
     *,
     reads_through_vrt: bool,
@@ -1428,7 +1444,7 @@ def _selected_band_count(
 
 
 def _reads_through_vrt(
-    dataset: DatasetReader,
+    dataset: DatasetReader | WarpedVRT,
     read_crs: rasterio.CRS,
     *,
     vrt_options: dict[str, Any] | None,
@@ -1437,9 +1453,10 @@ def _reads_through_vrt(
 
     rio-tiler routes a read through a ``WarpedVRT`` on any of three conditions:
     the read reprojects, the caller supplied VRT options (a cutline, say), or
-    the dataset already is one. This matters to the cell ceiling because a
-    ``WarpedVRT`` can carry an alpha band the source does not have, and that
-    band is read as the mask, costing one array beyond the selection.
+    the dataset already is one. This matters to the cell ceiling in two ways.
+    The VRT sizes the grid itself, rounding each axis of its window to whole
+    pixels, and it can carry an alpha band the source does not have, which is
+    read as the mask and costs one array beyond the selection.
 
     VRT options reach the read through the reader's own ``options``, so a host
     that wires a configured reader can trigger this without any request
