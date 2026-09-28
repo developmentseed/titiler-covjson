@@ -974,6 +974,44 @@ def test_bbox_unreadable_url_is_server_error(
     assert response.status_code == 500, response.text
 
 
+@pytest.mark.parametrize(
+    ("path", "selection"),
+    [
+        ("/bbox/-10,-5,10,5", {"datetime": "1900-01-01T00:00:00Z"}),
+        (
+            "/position",
+            {"coords": "POINT(0 0)", "datetime": "1900-01-01T00:00:00Z"},
+        ),
+        (
+            "/area",
+            {
+                "coords": "POLYGON((-10 -5, 10 -5, 10 5, -10 5, -10 -5))",
+                "datetime": "1900-01-01T00:00:00Z",
+            },
+        ),
+    ],
+    ids=["bbox", "position", "area"],
+)
+def test_rejects_datetime_before_dataset_open(
+    client: TestClient,
+    path: str,
+    selection: dict[str, str],
+) -> None:
+    response = client.get(path, params={"url": "/no/such/file.tif", **selection})
+
+    assert response.status_code == 400, response.text
+    assert "Temporal selection is not supported" in response.json()["detail"]
+
+
+def test_bbox_rejects_vertical_z_before_dataset_open(client: TestClient) -> None:
+    response = client.get(
+        "/bbox/-10,-5,10,5", params={"url": "/no/such/file.tif", "z": "850"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "Vertical selection is not supported" in response.json()["detail"]
+
+
 def test_bbox_rejects_invalid_crs(client: TestClient, cog_path: str) -> None:
     # CRSParams validates crs as a Pydantic BeforeValidator, so a bad value is a
     # 422 raised during parameter parsing, before the handler runs.

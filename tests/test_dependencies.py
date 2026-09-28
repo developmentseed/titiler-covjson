@@ -4,6 +4,7 @@ from titiler.core.errors import BadRequestError
 from titiler_covjson.dependencies import (
     CovJSONBandParams,
     area_stat,
+    reject_temporal_selection,
     reject_vertical_selection,
     to_kwargs,
     validate_covjson_format,
@@ -123,3 +124,16 @@ def test_reject_vertical_selection_accepts_absent_z(z: str | None) -> None:
     # matching the other selectors' empty-is-absent handling. No exception means
     # accepted (the None return is covered by the dependencies.py doctest).
     reject_vertical_selection(z)
+
+
+def test_reject_temporal_selection_rejects_requested_datetime() -> None:
+    with pytest.raises(BadRequestError, match="Temporal selection is not"):
+        reject_temporal_selection("1900-01-01T00:00:00Z")
+
+
+@pytest.mark.parametrize("datetime", ["", None], ids=["empty", "absent"])
+def test_reject_temporal_selection_accepts_absent_datetime(
+    datetime: str | None,
+) -> None:
+    # A valueless ?datetime= is empty-is-absent, like the other selector guards.
+    reject_temporal_selection(datetime)

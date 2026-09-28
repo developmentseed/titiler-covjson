@@ -69,6 +69,8 @@ selectors and enforces their mutual exclusivity.
 | `reproject` | `DatasetParams` | `nearest` | Warp resampling algorithm, used only when reprojection occurs. |
 | `max_size` | `PartFeatureParams` | `1024` | Longest output dimension when `width`/`height` are absent (Section 5). |
 | `width`, `height` | `PartFeatureParams` | none | Force exact output grid dimensions; when set, `max_size` does not apply. |
+| `z` | `reject_vertical_selection` | none | Rejected with a `400` when set, because the dataset has no vertical dimension. |
+| `datetime` | `reject_temporal_selection` | none | Rejected with a `400` when set, because the dataset has no temporal dimension. |
 | `f` | format selector | `CoverageJSON` | Output format selection (Section 7). |
 
 `rescale` is intentionally **not** offered (Section 8).
@@ -292,7 +294,7 @@ The body is a CovJSON Grid `Coverage`, built by the existing model layer
 
 | Code | Condition |
 | --- | --- |
-| `400` | Unsupported `f` value; the read exceeds the hard cell-count ceiling (the grid measured across every selected band); more than one of `parameter-name` / `bidx` / `expression`; a band index out of range, whether supplied by `bidx` / `parameter-name` or referenced inside an `expression`; an `expression` band reference whose digits are not a band number (e.g., `b1+b2b`); a blank `expression` sub-expression; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
+| `400` | Unsupported `f` value; a `z` or `datetime` selection, checked before the dataset is opened; the read exceeds the hard cell-count ceiling (the grid measured across every selected band); more than one of `parameter-name` / `bidx` / `expression`; a band index out of range, whether supplied by `bidx` / `parameter-name` or referenced inside an `expression`; an `expression` band reference whose digits are not a band number (e.g., `b1+b2b`); a blank `expression` sub-expression; duplicate `expression` band names; degenerate bbox (`minx >= maxx` or `miny >= maxy`); a bounding box too thin to sample (spans under half a read pixel in one dimension with no explicit `width` / `height`), on both the same-CRS and reproject read paths. |
 | `422` | Malformed path bbox (non-numeric segment), invalid or unsupported `crs`, or other FastAPI / Pydantic validation failure. |
 | `500` | Dataset open or read failure (e.g., an unreadable `url`), or an unexpected internal processing error. |
 

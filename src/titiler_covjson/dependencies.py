@@ -226,11 +226,11 @@ def reject_vertical_selection(
         Query(description="Vertical level. Not supported by this 2-D endpoint."),
     ] = None,
 ) -> None:
-    """Reject a vertical (``z``) selection on a 2-D point endpoint.
+    """Reject a vertical (``z``) selection on a 2-D endpoint.
 
-    A single 2-D raster has no vertical dimension to sample, so honoring or
-    silently dropping a requested vertical level would be dishonest. Point
-    sampling therefore rejects a ``z`` selection outright. This runs as a FastAPI
+    A single 2-D raster has no vertical dimension, so honoring or silently
+    dropping a requested vertical level would be dishonest. The endpoint
+    therefore rejects a ``z`` selection outright. This runs as a FastAPI
     dependency for its side effect alone (it returns nothing): the host
     application's titiler exception handlers render the raised error as a 400
     response.
@@ -259,13 +259,59 @@ def reject_vertical_selection(
     """
     # Reject on truthiness, not `is not None`: a valueless `?z=` normalizes to
     # "no vertical selection" (accepted), matching validate_covjson_format's
-    # `if f and ...` and CovJSONBandParams' `x or None`. The 2-D backing cannot
-    # sample a vertical level; see docs/adr/0001-covjson-http-api-direction.md.
+    # `if f and ...` and CovJSONBandParams' `x or None`. The 2-D backing has no
+    # vertical level to read (see docs/adr/0001-covjson-http-api-direction.md).
     if z:
         msg = (
-            "Vertical selection is not supported by this endpoint: it samples a "
-            "single 2-D raster, which has no vertical dimension. Remove the `z` "
-            "parameter."
+            "Vertical selection is not supported by this endpoint because it "
+            "reads a single 2-D raster, which has no vertical dimension. Remove "
+            "the `z` parameter."
+        )
+        raise BadRequestError(msg)
+
+
+def reject_temporal_selection(
+    datetime: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Time instant or interval. Not supported by this 2-D endpoint."
+            )
+        ),
+    ] = None,
+) -> None:
+    """Reject a temporal (``datetime``) selection on a 2-D endpoint.
+
+    A single raster has no temporal dimension to query, so returning its values
+    for an arbitrary requested time would imply that the selector was honored.
+    This dependency rejects a requested time as a 400 response.
+
+    Args:
+        datetime: The requested time or interval, or ``None`` when unspecified.
+
+    Raises:
+        BadRequestError: If ``datetime`` is a non-empty value.
+
+    Examples:
+        An absent or empty selector is accepted:
+
+        >>> reject_temporal_selection() is None
+        True
+        >>> reject_temporal_selection("") is None
+        True
+
+        A requested time is rejected:
+
+        >>> reject_temporal_selection("1900-01-01T00:00:00Z")
+        Traceback (most recent call last):
+            ...
+        titiler.core.errors.BadRequestError: Temporal selection is not ...
+    """
+    if datetime:
+        msg = (
+            "Temporal selection is not supported by this endpoint because it "
+            "reads a single 2-D raster, which has no temporal dimension. Remove "
+            "the `datetime` parameter."
         )
         raise BadRequestError(msg)
 
