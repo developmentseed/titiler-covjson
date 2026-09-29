@@ -15,6 +15,7 @@ import rasterio.transform
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from rasterio.control import GroundControlPoint
 from rasterio.enums import ColorInterp
 from rio_tiler.io import Reader
 from titiler.core.errors import DEFAULT_STATUS_CODES, add_exception_handlers
@@ -164,6 +165,24 @@ def rgba_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     """
     path = str(tmp_path_factory.mktemp("data") / "rgba.tif")
     _write_rgba_cog(path)
+
+    return path
+
+
+@pytest.fixture(scope="session")
+def gcp_cog_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """Write a 16x16 single-band raster located by GCPs rather than a transform.
+
+    ``Reader`` opens a source with ground control points (GCPs) as a
+    ``WarpedVRT``, so every read of this fixture goes through one with no reader
+    configuration and no reprojection. It has no nodata value, so that VRT adds
+    an alpha band. Session-scoped.
+
+    Returns:
+        str: Filesystem path to the written raster.
+    """
+    path = str(tmp_path_factory.mktemp("data") / "gcp.tif")
+    _write_gcp_cog(path)
 
     return path
 
@@ -552,3 +571,34 @@ def _write_rgba_cog(path: str) -> None:
             ColorInterp.blue,
             ColorInterp.alpha,
         )
+
+
+def _write_gcp_cog(path: str) -> None:
+    """Write a 16x16 single-band ``float32`` GeoTIFF located by four corner GCPs.
+
+    The GCPs place the corners at ``(-10, -5, 10, 5)`` in EPSG:4326, the extent
+    of the other fixtures, and the file carries no geotransform and no nodata.
+
+    Args:
+        path: Destination filesystem path.
+    """
+    width = height = 16
+    gcps = (
+        GroundControlPoint(row=0, col=0, x=-10.0, y=5.0),
+        GroundControlPoint(row=0, col=width, x=10.0, y=5.0),
+        GroundControlPoint(row=height, col=width, x=10.0, y=-5.0),
+        GroundControlPoint(row=height, col=0, x=-10.0, y=-5.0),
+    )
+    band = np.arange(width * height, dtype="float32").reshape(height, width)
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "count": 1,
+        "width": width,
+        "height": height,
+        "crs": pyproj.CRS.from_epsg(4326),
+        "gcps": gcps,
+    }
+
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(band, 1)
