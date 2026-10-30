@@ -2507,6 +2507,7 @@ dependencies = [
     { name = "covjson-pydantic" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pint" },
     { name = "pyproj" },
     { name = "rio-tiler" },
     { name = "titiler-core" },
@@ -2538,6 +2539,7 @@ server = [
 requires-dist = [
     { name = "covjson-pydantic", specifier = ">=0.8.0,<1.0" },
     { name = "numpy", specifier = ">=2.0.0" },
+    { name = "pint", specifier = "<0.26.2" },
     { name = "pyproj", specifier = ">=3.4.0,<4.0" },
     { name = "rio-tiler", specifier = ">=9.4.1,<10.0" },
     { name = "titiler-core", specifier = ">=2.0,<3.0" },
