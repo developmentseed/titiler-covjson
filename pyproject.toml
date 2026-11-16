@@ -61,11 +61,8 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 # Lower bounds so `uv sync --resolution lowest-direct` (used in CI to test the
-# runtime floors) does not drag this tooling down to unbuildable ancient releases
-# (e.g., mkdocs 0.10, which imports the removed `imp` module). The mkdocs upper
-# bounds keep the docs toolchain on its current, mutually compatible majors
-# (mkdocs 1.x with mkdocs-material 9.x). All dev-only; no effect on the runtime
-# compatibility contract.
+# runtime floors) does not drag this tooling down to unbuildable ancient
+# releases. All dev-only, with no effect on the runtime compatibility contract.
 dev = [
     "pytest>=7.0",
     "pytest-cov>=7.0",
@@ -86,7 +83,6 @@ dev = [
 # `uv sync --no-dev` install never pulls it; `dev` includes it and layers the
 # [standard] extra (watchfiles/uvloop/httptools) for `--reload`.
 server = ["uvicorn>=0.50.2"]
-docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.6,<10"]
 
 [tool.uv]
 # uv 0.13 is the first release that writes uv.lock with `revision = 5`. An older
