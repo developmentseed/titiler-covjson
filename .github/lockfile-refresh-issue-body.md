@@ -22,7 +22,7 @@ Preview what would change:
 uv lock --upgrade --dry-run
 ```
 
-Then, on a branch:
+Then, on a branch, replacing `NNN` in the `gh pr create` command with this issue's number:
 
 ```bash
 git switch -c chore/refresh-lockfile
@@ -32,7 +32,7 @@ uv run pytest
 git add uv.lock
 git commit -m "build(deps): refresh stale transitive lock entries"
 git push -u origin chore/refresh-lockfile
-gh pr create --fill
+gh pr create --title "build(deps): refresh stale transitive lock entries" --body "Closes #NNN" --label chore --label dependencies
 ```
 
 CI covers both resolutions and the Docker smoke test, so let it finish before merging.
@@ -43,4 +43,4 @@ CI covers both resolutions and the Docker smoke test, so let it finish before me
 
 ## Closing this issue
 
-Close it once the refresh lands, or immediately if the dry run shows nothing worth taking this quarter.
+Merging the pull request closes it. If the dry run shows nothing worth taking this quarter, close it right away.
