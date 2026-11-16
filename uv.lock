@@ -2337,15 +2337,15 @@ wheels = [
 
 [[package]]
 name = "ucumvert"
-version = "0.3.2"
+version = "0.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lark" },
     { name = "pint" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/e6/e8b7156399642c12ba9e5975d4481d827d0b67bc8574e9d89ff0fcfa3750/ucumvert-0.3.2.tar.gz", hash = "sha256:a3708a38120cf6617e792ac2eb3d610f269cd7b8e8ce52fd2f15a4e3fd76f9fb", size = 53211, upload-time = "2026-06-04T20:00:32.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/1a/e2be1e0794e725c1b50833930086e28bcadc32512054af5c82d1a0e8014c/ucumvert-0.3.3.tar.gz", hash = "sha256:c021bc21176c89cb170db79390d2edb213b91c798f4cfb9a99c51943d494d837", size = 53361, upload-time = "2026-11-06T00:44:17.044Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/3f/103f0c229a34c109e163abca0028daaf2ce91fb39b0240680d2053feb189/ucumvert-0.3.2-py3-none-any.whl", hash = "sha256:b1c3c5b875843642f52f5f015fc8728ff997ce9c337b64bd25141ae44848bdd0", size = 54227, upload-time = "2026-06-04T20:00:31.301Z" },
+    { url = "https://files.pythonhosted.org/packages/81/c5/2af444a0c6ab02c1ecb478fe070909215634e9932bac7156478dcba424c8/ucumvert-0.3.3-py3-none-any.whl", hash = "sha256:0ed97d831c8209d3eec3df62b65249be75e4f9b8975e0ec20d95ddb02c8476e9", size = 54398, upload-time = "2026-11-06T00:44:15.773Z" },
 ]
 
 [[package]]
