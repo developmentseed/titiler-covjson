@@ -3,12 +3,14 @@
 # ---- builder: install the package + server into a venv ----
 # This stage uses the runtime stage's base image, so the venv it builds is
 # binary-compatible there (same interpreter path), letting the runtime copy the
-# venv wholesale. uv comes from its distroless image, which tracks every uv
-# release. uv's derived images stop updating once uv drops their Debian base
-# (the bookworm ones stop at uv 0.9.30), and a stale uv fails [tool.uv]
-# required-version in pyproject.toml.
+# venv wholesale. uv comes from its distroless image rather than a derived one,
+# because uv's derived images stop updating once uv drops their Debian base (the
+# bookworm ones stop at uv 0.9.30). The tag pins a uv release, which must
+# satisfy [tool.uv] required-version in pyproject.toml. Dependabot updates only
+# FROM lines and never raises this tag, so raise it by hand, to a release at
+# least 7 days old.
 FROM python:3.13-slim-trixie AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
 # Copy link mode avoids hardlink-across-layer issues, and bytecode trims cold
 # start. Disabling Python downloads keeps the venv on the base image's

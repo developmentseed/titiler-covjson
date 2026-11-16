@@ -1,6 +1,10 @@
 # Continuous integration on each code change: run the pre-commit checks once;
 # type-check and run the test suite across the supported Python versions; and
 # report coverage.
+#
+# Every setup-uv step sets `version: latest-known`, which installs the newest uv
+# whose checksums the pinned setup-uv release bundles, so uv changes only when
+# Dependabot bumps setup-uv, after its cooldown.
 name: CI
 
 on:
@@ -66,6 +70,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: latest-known
           enable-cache: true
       - name: Install dependencies
         run: uv sync --locked --quiet
@@ -88,6 +93,7 @@ jobs:
       - name: Set up uv and Python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: latest-known
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - name: Install dependencies
@@ -123,6 +129,7 @@ jobs:
       - name: Set up uv and Python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: latest-known
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           # Namespace the cache per resolution so the highest and lowest-direct
@@ -160,6 +167,7 @@ jobs:
       - name: Set up uv and Python ${{ fromJSON(needs.config.outputs.python-versions)[0] }}
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: latest-known
           python-version: ${{ fromJSON(needs.config.outputs.python-versions)[0] }}
           enable-cache: true
           # This job runs on the minimum Python (python-versions[0]), the same
@@ -192,6 +200,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: latest-known
           enable-cache: true
           cache-suffix: docker-smoke
       - name: Install host dependencies
