@@ -1096,6 +1096,9 @@ wheels = [
 name = "pint"
 version = "0.25.3"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.12'",
+]
 dependencies = [
     { name = "flexcache" },
     { name = "flexparser" },
@@ -1105,6 +1108,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/52/9d/b1379cdbd33a49d17d627bc24e2b63cca06a1c5343b38072d2889499e82e/pint-0.25.3.tar.gz", hash = "sha256:f8f5df6cf65314d74da1ade1bf96f8e3e4d0c41b51577ac53c49e7d44ca5acee", size = 255106, upload-time = "2026-03-19T21:57:08.72Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1b/dd/a9fe6a0a09512da23951c68bf36466aeecd89def3183dc095edbc807ddc5/pint-0.25.3-py3-none-any.whl", hash = "sha256:27eb25143bd5de9fcc4d5a4b484f16faf6b4615aa93ece6b3373a8c1a3c1b97d", size = 307488, upload-time = "2026-03-19T21:57:07.022Z" },
+]
+
+[[package]]
+name = "pint"
+version = "0.26.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version >= '3.12' and python_full_version < '3.15'",
+]
+dependencies = [
+    { name = "flexcache" },
+    { name = "flexparser" },
+    { name = "platformdirs" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/b0/cef9c8913ebe959d97b2d57b1fc2a77a4291c4f2bd4dc3fe4d3313c938ea/pint-0.26.2.tar.gz", hash = "sha256:391e5d2fc01fdb121c113b8eb47386688575542c1f5144c465ff318bf5133573", size = 295834, upload-time = "2026-10-19T19:49:31.845Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/d5/01ea71591a29e88926582e3ca7ed32f8b933e9ebc99187a7ab100587242d/pint-0.26.2-py3-none-any.whl", hash = "sha256:c94124cdb19baa1a84bb65c8bb9a620a9636b9b9cd80f32f30ad7ff795ea2eb8", size = 351853, upload-time = "2026-10-19T19:49:29.966Z" },
 ]
 
 [[package]]
@@ -2220,7 +2242,7 @@ requires-dist = [
     { name = "pyproj", specifier = ">=3.4.0,<4.0" },
     { name = "rio-tiler", specifier = ">=9.4.1,<10.0" },
     { name = "titiler-core", specifier = ">=2.0,<3.0" },
-    { name = "ucumvert", specifier = ">=0.3.0" },
+    { name = "ucumvert", specifier = ">=0.3.3" },
 ]
 
 [package.metadata.requires-dev]
@@ -2337,15 +2359,16 @@ wheels = [
 
 [[package]]
 name = "ucumvert"
-version = "0.3.2"
+version = "0.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lark" },
-    { name = "pint" },
+    { name = "pint", version = "0.25.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pint", version = "0.26.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/e6/e8b7156399642c12ba9e5975d4481d827d0b67bc8574e9d89ff0fcfa3750/ucumvert-0.3.2.tar.gz", hash = "sha256:a3708a38120cf6617e792ac2eb3d610f269cd7b8e8ce52fd2f15a4e3fd76f9fb", size = 53211, upload-time = "2026-06-04T20:00:32.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/1a/e2be1e0794e725c1b50833930086e28bcadc32512054af5c82d1a0e8014c/ucumvert-0.3.3.tar.gz", hash = "sha256:c021bc21176c89cb170db79390d2edb213b91c798f4cfb9a99c51943d494d837", size = 53361, upload-time = "2026-11-06T00:44:17.044Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/3f/103f0c229a34c109e163abca0028daaf2ce91fb39b0240680d2053feb189/ucumvert-0.3.2-py3-none-any.whl", hash = "sha256:b1c3c5b875843642f52f5f015fc8728ff997ce9c337b64bd25141ae44848bdd0", size = 54227, upload-time = "2026-06-04T20:00:31.301Z" },
+    { url = "https://files.pythonhosted.org/packages/81/c5/2af444a0c6ab02c1ecb478fe070909215634e9932bac7156478dcba424c8/ucumvert-0.3.3-py3-none-any.whl", hash = "sha256:0ed97d831c8209d3eec3df62b65249be75e4f9b8975e0ec20d95ddb02c8476e9", size = 54398, upload-time = "2026-11-06T00:44:15.773Z" },
 ]
 
 [[package]]
