@@ -1,14 +1,21 @@
 # syntax=docker/dockerfile:1
 
 # ---- builder: install the package + server into a venv ----
-# The uv image is itself based on python:3.13-slim-bookworm, so the venv it
-# builds is binary-compatible with the runtime stage below (same interpreter
-# path), letting the runtime copy the venv wholesale.
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+# This stage uses the runtime stage's base image, so the venv it builds is
+# binary-compatible there (same interpreter path), letting the runtime copy the
+# venv wholesale. uv comes from its distroless image, which tracks every uv
+# release. uv's derived images stop updating once uv drops their Debian base
+# (the bookworm ones stop at uv 0.9.30), and a stale uv fails [tool.uv]
+# required-version in pyproject.toml.
+FROM python:3.13-slim-trixie AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# copy link mode avoids hardlink-across-layer issues; bytecode trims cold start.
+# Copy link mode avoids hardlink-across-layer issues, and bytecode trims cold
+# start. Disabling Python downloads keeps the venv on the base image's
+# interpreter, which the runtime stage shares.
 ENV UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=0
 
 WORKDIR /app
 
@@ -26,17 +33,15 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable --group server
 
 # ---- runtime: minimal image with just the venv + app + sample COG ----
-# Same Python minor AND Debian release (bookworm) as the builder base, so the
-# copied venv's compiled extensions load.
+# This stage uses the builder's base image, so the copied venv's compiled
+# extensions load.
 #
-# Base-image CVEs: this base carries some Critical/High CVEs in bookworm packages
-# (perl, sqlite3, ncurses, and zlib's MiniZip zip writer) that Debian marks
-# will_not_fix / fix_deferred, so no patched package exists: a rebuild or
-# `apt upgrade` cannot clear them. They fall outside this demo's code path (a
-# read-only raster -> CoverageJSON server never runs perl, opens SQLite, uses a
-# terminal, or writes zip archives), and this container is local-demo-only, so
-# they are accepted rather than chased.
-FROM python:3.13-slim-bookworm AS runtime
+# Base-image CVEs: this base carries High-severity CVEs in Debian packages
+# (e.g., glibc, util-linux, perl, ncurses, and expat) for which Debian has no
+# patched package, most of them marked won't-fix, so a rebuild or `apt upgrade`
+# cannot clear them. This container is local-demo-only, so they are accepted
+# rather than chased.
+FROM python:3.13-slim-trixie AS runtime
 
 # rasterio's wheels bundle GDAL but still dlopen a few base system libraries;
 # libexpat1 is the one the slim image lacks (imports fail without it). This is a
