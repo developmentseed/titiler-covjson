@@ -22,13 +22,24 @@ updates:
     # rewrite the version bounds in pyproject.toml. Our runtime floors are the
     # library's compatibility contract and must rise only by deliberate
     # decision, not be ratcheted up on every dependency release (see issue #45).
-    # Caveat: under lockfile-only, uv-ecosystem Dependabot leaves transitive
-    # lock entries stale; a periodic `uv lock --upgrade` covers that if needed.
+    #
+    # Version updates leave the following stale, so the monthly
+    # refresh-lock.yml workflow re-locks every entry instead:
+    #
+    # - indirect dependencies, which the default `allow` excludes
+    # - packages whose newest release requires a newer Python than our oldest
+    #   supported one, even direct dependencies such as numpy
+    #
+    # Allowing every dependency type would cover only indirect dependencies, so
+    # `allow` keeps its default.
     versioning-strategy: lockfile-only
     schedule:
       interval: weekly
     # See the cooldown note above; only `default-days` applies to the uv
-    # ecosystem as well.
+    # ecosystem as well. Keep it equal to `exclude-newer` in pyproject.toml,
+    # because uv applies that setting to Dependabot's runs too. With a shorter
+    # cooldown here, Dependabot targets releases that uv refuses, and its job
+    # errors instead of opening a pull request for that package.
     cooldown:
       default-days: 7
     groups:
